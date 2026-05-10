@@ -41,7 +41,7 @@ export function isPidAlive(pid) {
   }
 }
 
-/** Xóa run.json nếu PID trong file không còn sống (dọn rác). */
+/** Remove run.json when the stored PID is no longer alive (cleanup). */
 export function pruneStaleRunState() {
   const s = readRunState();
   if (!s) return;

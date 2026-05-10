@@ -1,6 +1,6 @@
 /**
- * Tên tab theo ngày (múi giờ máy): COPYHUB-YYYY-MM-DD
- * Google Sheets: tối đa 100 ký tự; ký tự cấm đã tránh trong format cố định.
+ * Daily tab name (machine local timezone): COPYHUB-YYYY-MM-DD
+ * Google Sheets: title max 100 chars; fixed format avoids forbidden characters.
  */
 export function dailySheetTabName() {
   const d = new Date();

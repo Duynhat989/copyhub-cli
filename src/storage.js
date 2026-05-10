@@ -37,7 +37,7 @@ export async function readRecentHistory(maxLines = 50) {
 }
 
 /**
- * Mới nhất trước (dùng cho overlay Electron).
+ * Newest items first (for Electron overlay).
  * @param {number} [maxLines]
  * @returns {Array<{ ts?: string, text?: string, syncedToSheet?: boolean }>}
  */

@@ -34,7 +34,7 @@ export async function getAuthorizedClient() {
   const cfg = await loadConfig();
   if (!cfg) {
     throw new Error(
-      `Chưa có cấu hình OAuth. Đặt ${ENV_GOOGLE_CLIENT_ID} và ${ENV_GOOGLE_CLIENT_SECRET} (file .env hoặc môi trường), hoặc chạy: copyhub config --client-id ID --client-secret SECRET`,
+      `OAuth is not configured. Set ${ENV_GOOGLE_CLIENT_ID} and ${ENV_GOOGLE_CLIENT_SECRET} (.env or environment), or run: copyhub config --client-id ID --client-secret SECRET`,
     );
   }
   const client = createOAuthClient(cfg);
@@ -75,20 +75,20 @@ function escapeHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
-/** Gợi ý phím (Electron Accelerator) theo nền tảng — JSON nhúng vào trang. */
+/** Shortcut presets (Electron Accelerator) per platform — embedded as JSON in the setup page. */
 const PLATFORM_PRESETS = {
   win: [
-    { label: 'Ctrl + Shift + H · khuyên dùng', value: 'CommandOrControl+Shift+H' },
+    { label: 'Ctrl + Shift + H · recommended', value: 'CommandOrControl+Shift+H' },
     { label: 'Control + Shift + H', value: 'Control+Shift+H' },
     { label: 'Alt + Shift + H', value: 'Alt+Shift+H' },
   ],
   mac: [
-    { label: '⌘ + Shift + H · khuyên dùng', value: 'CommandOrControl+Shift+H' },
+    { label: '⌘ + Shift + H · recommended', value: 'CommandOrControl+Shift+H' },
     { label: 'Command + Shift + H', value: 'Command+Shift+H' },
     { label: '⌘ + Shift + V', value: 'Command+Shift+V' },
   ],
   linux: [
-    { label: 'Ctrl + Shift + H · khuyên dùng', value: 'CommandOrControl+Shift+H' },
+    { label: 'Ctrl + Shift + H · recommended', value: 'CommandOrControl+Shift+H' },
     { label: 'Control + Shift + H', value: 'Control+Shift+H' },
     { label: 'Alt + Shift + H', value: 'Alt+Shift+H' },
   ],
@@ -110,11 +110,11 @@ function setupPageHtml(setupToken, currentSheetId, currentAccelerator, currentPl
   const presetsJson = JSON.stringify(PLATFORM_PRESETS);
 
   return `<!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CopyHub — Cài đặt</title>
+  <title>CopyHub — Setup</title>
   <style>
     :root {
       --bg: #f0f4fa;
@@ -301,8 +301,8 @@ function setupPageHtml(setupToken, currentSheetId, currentAccelerator, currentPl
 <body>
   <div class="wrap">
     <div class="brand">CopyHub</div>
-    <h1>Cài đặt sau đăng nhập</h1>
-    <p class="sub">Thông tin lưu vào <code style="background:#e2e8f0;padding:2px 8px;border-radius:6px;font-size:13px;">~/.copyhub/config.json</code></p>
+    <h1>Post-login setup</h1>
+    <p class="sub">Saved to <code style="background:#e2e8f0;padding:2px 8px;border-radius:6px;font-size:13px;">~/.copyhub/config.json</code></p>
 
     <form method="POST" action="/setup">
       <input type="hidden" name="t" value="${tVal}" />
@@ -311,14 +311,14 @@ function setupPageHtml(setupToken, currentSheetId, currentAccelerator, currentPl
       <div class="card">
         <h2>Google Sheet</h2>
         <label class="field-label" for="sid">Spreadsheet ID</label>
-        <input id="sid" type="text" name="googleSheetId" value="${idVal}" placeholder="Trong URL: …/spreadsheets/d/<ID>/edit" autocomplete="off" />
-        <p class="hint">Có thể để trống và điền sau. Mỗi ngày một tab tên <code>COPYHUB-YYYY-MM-DD</code>.</p>
+        <input id="sid" type="text" name="googleSheetId" value="${idVal}" placeholder="From URL: …/spreadsheets/d/<ID>/edit" autocomplete="off" />
+        <p class="hint">Leave blank and fill later if needed. One tab per day named <code>COPYHUB-YYYY-MM-DD</code>.</p>
       </div>
 
       <div class="card">
-        <h2>Phím tắt cửa lịch sử (overlay)</h2>
-        <label class="field-label">Nền tảng bạn dùng</label>
-        <div class="platform-row" role="group" aria-label="Chọn hệ điều hành">
+        <h2>History overlay shortcut</h2>
+        <label class="field-label">Your platform</label>
+        <div class="platform-row" role="group" aria-label="Choose operating system">
           <button type="button" class="platform-btn" data-platform="win" aria-pressed="false">
             <span class="ico" aria-hidden="true">⊞</span>
             <span class="name">Windows</span>
@@ -336,21 +336,21 @@ function setupPageHtml(setupToken, currentSheetId, currentAccelerator, currentPl
           </button>
         </div>
 
-        <label class="field-label" for="acc">Accelerator (để trống = mặc định Ctrl/⌘ + Shift + H)</label>
-        <input id="acc" type="text" name="overlayAccelerator" value="${accVal}" placeholder="Chọn gợi ý bên dưới hoặc gõ tay" autocomplete="off" spellcheck="false" />
+        <label class="field-label" for="acc">Accelerator (blank = default Ctrl/⌘ + Shift + H)</label>
+        <input id="acc" type="text" name="overlayAccelerator" value="${accVal}" placeholder="Pick a preset below or type your own" autocomplete="off" spellcheck="false" />
 
-        <p class="hint">Trên Windows trong file cấu hình nên viết <code>Control</code> không viết <code>Ctrl</code>. Tránh <code>Control+Alt+…</code> (hay bị driver chiếm).</p>
-        <p class="hint"><code>COPYHUB_OVERLAY_ACCELERATOR</code> trong <code>.env</code> (nếu có) sẽ ghi đè giá trị này.</p>
+        <p class="hint">On Windows use <code>Control</code> in config, not <code>Ctrl</code>. Avoid <code>Control+Alt+…</code> (often grabbed by drivers).</p>
+        <p class="hint"><code>COPYHUB_OVERLAY_ACCELERATOR</code> in <code>.env</code>, if set, overrides this value.</p>
 
         <div id="chipRegion" class="chips" aria-live="polite"></div>
         <p id="platformHint" class="hint" style="margin-top:4px;"></p>
 
         <div class="sheet-note">
-          <strong>Gợi ý:</strong> Linux desktop cần phiên GUI; có thể cần <code>xclip</code> / <code>wl-clipboard</code>. macOS có thể cần quyền Trợ năng cho phím toàn cục.
+          <strong>Note:</strong> Linux needs a GUI session; you may need <code>xclip</code> / <code>wl-clipboard</code>. macOS may require Accessibility for global shortcuts.
         </div>
       </div>
 
-      <button type="submit" class="submit">Lưu cài đặt</button>
+      <button type="submit" class="submit">Save settings</button>
     </form>
   </div>
 
@@ -365,9 +365,9 @@ function setupPageHtml(setupToken, currentSheetId, currentAccelerator, currentPl
       var btns = document.querySelectorAll('.platform-btn');
 
       var hints = {
-        win: 'Windows: CommandOrControl = phím Ctrl.',
-        mac: 'macOS: CommandOrControl = phím ⌘ Command.',
-        linux: 'Linux: giống Windows với Ctrl; clipboard phụ thuộc desktop.'
+        win: 'Windows: CommandOrControl = Ctrl.',
+        mac: 'macOS: CommandOrControl = ⌘ Command.',
+        linux: 'Linux: same as Windows with Ctrl; clipboard depends on your desktop.'
       };
 
       function setPlatform(p) {
@@ -406,7 +406,7 @@ function setupPageHtml(setupToken, currentSheetId, currentAccelerator, currentPl
 }
 
 const successHtml = `<!DOCTYPE html>
-<html lang="vi"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>CopyHub</title>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>CopyHub</title>
 <style>
 body{font-family:system-ui,sans-serif;min-height:100vh;margin:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(160deg,#e8eef9,#f5f7fb);padding:24px;}
 .box{background:#fff;padding:36px 40px;border-radius:16px;box-shadow:0 8px 32px rgba(20,24,36,.1);max-width:420px;text-align:center;line-height:1.65;color:#141824;}
@@ -414,19 +414,19 @@ body{font-family:system-ui,sans-serif;min-height:100vh;margin:0;display:flex;ali
 .box p{margin:.65rem 0;color:#5a6272;font-size:15px;}
 .box code{background:#eff6ff;color:#1d4ed8;padding:2px 8px;border-radius:6px;font-size:13px;}
 </style></head>
-<body><div class="box"><h2>Đã lưu cài đặt</h2>
-<p>Bạn có thể đóng tab này.</p>
-<p>Chạy <code>copyhub start</code> hoặc khởi động lại overlay để áp dụng phím tắt.</p></div></body></html>`;
+<body><div class="box"><h2>Settings saved</h2>
+<p>You can close this tab.</p>
+<p>Run <code>copyhub start</code> or restart the overlay to apply the shortcut.</p></div></body></html>`;
 
 /**
- * Mở trình duyệt, OAuth, sau đó trang cài đặt Spreadsheet ID.
+ * Open browser for OAuth, then Spreadsheet ID setup page.
  * @returns {Promise<void>}
  */
 export async function runLoginFlow() {
   const cfg = await loadConfig();
   if (!cfg) {
     throw new Error(
-      `Chưa có cấu hình. Đặt ${ENV_GOOGLE_CLIENT_ID} và ${ENV_GOOGLE_CLIENT_SECRET} trong .env, hoặc chạy: copyhub config --client-id ... --client-secret ...`,
+      `Not configured. Set ${ENV_GOOGLE_CLIENT_ID} and ${ENV_GOOGLE_CLIENT_SECRET} in .env, or run: copyhub config --client-id ... --client-secret ...`,
     );
   }
   const port = cfg.redirectPort ?? DEFAULT_OAUTH_REDIRECT_PORT;
@@ -489,7 +489,7 @@ export async function runLoginFlow() {
           const t = u.searchParams.get('t');
           if (!setupToken || t !== setupToken) {
             res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end('<p>Phiên cài đặt không hợp lệ. Chạy lại <code>copyhub login</code>.</p>');
+            res.end('<p>Invalid setup session. Run <code>copyhub login</code> again.</p>');
             return;
           }
           const sheet = await loadSheetSyncTarget();
@@ -534,7 +534,7 @@ export async function runLoginFlow() {
             await mergeConfigPartial(partial);
           } catch {
             res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end('<p>Không ghi được config. Kiểm tra quyền ghi ~/.copyhub/</p>');
+            res.end('<p>Could not write config. Check write permissions on ~/.copyhub/</p>');
             return;
           }
           setupToken = null;
@@ -556,7 +556,7 @@ export async function runLoginFlow() {
     const idleMs = 20 * 60 * 1000;
     const idleTimer = setTimeout(() => {
       if (!settled) {
-        console.warn('Hết thời gian chờ trang cài đặt (20 phút).');
+        console.warn('Setup page idle timeout (20 minutes).');
         finish();
       }
     }, idleMs);
@@ -564,16 +564,16 @@ export async function runLoginFlow() {
 
     server.on('error', reject);
     server.listen(port, '127.0.0.1', async () => {
-      console.log(`OAuth: http://127.0.0.1:${port}/oauth2callback → sau đó trang cài đặt /setup`);
-      console.log('Đang mở trình duyệt để đăng nhập Google (OAuth — Google Sheets)...');
+      console.log(`OAuth: http://127.0.0.1:${port}/oauth2callback → then setup page /setup`);
+      console.log('Opening browser for Google sign-in (OAuth — Google Sheets)...');
       try {
         await open(authUrl);
       } catch {
-        console.log('Không mở được trình duyệt. Mở thủ công URL sau:');
+        console.log('Could not open browser. Open this URL manually:');
         console.log(authUrl);
       }
     });
   });
 
-  console.log(`Đã lưu token OAuth vào ${TOKENS_PATH}`);
+  console.log(`Saved OAuth tokens to ${TOKENS_PATH}`);
 }

@@ -26,7 +26,7 @@ export function startClipboardWatcher(onNewCopy, options = {}) {
       lastHash = h;
       await onNewCopy(text);
     } catch {
-      // Bỏ qua lỗi đọc clipboard tạm thời
+      // Ignore transient clipboard read errors
     }
   };
 

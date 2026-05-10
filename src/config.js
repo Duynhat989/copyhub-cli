@@ -7,7 +7,7 @@ import { ensureDir } from './storage.js';
  * @typedef {{ clientId: string, clientSecret: string, redirectPort: number }} CopyHubConfig
  */
 
-/** Cổng localhost mặc định cho OAuth (callback trình duyệt). */
+/** Default localhost port for OAuth browser callback. */
 export const DEFAULT_OAUTH_REDIRECT_PORT = 19999;
 
 export const ENV_GOOGLE_CLIENT_ID = 'COPYHUB_GOOGLE_CLIENT_ID';
@@ -22,7 +22,7 @@ function parseRedirectPortFromEnv() {
   return n;
 }
 
-/** Cả Client ID và Secret đều lấy từ biến môi trường (hoặc .env). */
+/** Both Client ID and Secret come from environment (or .env). */
 export function hasOAuthCredentialsInEnv() {
   const id = process.env[ENV_GOOGLE_CLIENT_ID]?.trim();
   const sec = process.env[ENV_GOOGLE_CLIENT_SECRET]?.trim();
@@ -101,8 +101,8 @@ export async function loadSheetSyncTarget() {
 }
 
 /**
- * Phím tắt overlay (Electron Accelerator). Để trống = dùng mặc định trong app.
- * Ưu tiên biến môi trường COPYHUB_OVERLAY_ACCELERATOR (nếu có), sau đó config.
+ * Overlay shortcut (Electron Accelerator). Empty = app default.
+ * Env COPYHUB_OVERLAY_ACCELERATOR wins when set, then config.
  */
 export function loadOverlayAcceleratorFromConfigSync() {
   if (!existsSync(CONFIG_PATH)) return '';
@@ -133,7 +133,7 @@ export function loadOverlayPlatformFromConfigSync() {
 }
 
 /**
- * Gộp một phần vào ~/.copyhub/config.json (giữ clientId/secret hiện có).
+ * Merge fields into ~/.copyhub/config.json (keeps existing clientId/secret).
  * @param {Record<string, unknown>} partial
  */
 export async function mergeConfigPartial(partial) {

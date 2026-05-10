@@ -1,7 +1,7 @@
 {
-  "name": "copyhub",
+  "name": "copyhub-cli",
   "version": "1.0.0",
-  "description": "CopyHub — clipboard, lưu cục bộ, đồng bộ Google Sheets (OAuth). Windows, macOS, Linux.",
+  "description": "CopyHub — clipboard, local history, Google Sheets sync (OAuth). Windows, macOS, Linux.",
   "type": "module",
   "bin": {
     "copyhub": "./src/cli.js"

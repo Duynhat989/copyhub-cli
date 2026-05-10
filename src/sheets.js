@@ -18,7 +18,7 @@ function a1RangeForTab(tabName) {
  * @param {import('googleapis').sheets_v4.Sheets} sheets
  * @param {string} spreadsheetId
  * @param {string} tabName
- * @returns {Promise<boolean>} true nếu vừa tạo tab mới (đã ghi dòng tiêu đề)
+ * @returns {Promise<boolean>} true if a new tab was created (header row written)
  */
 async function ensureDailySheetExists(sheets, spreadsheetId, tabName) {
   const { data } = await sheets.spreadsheets.get({
@@ -59,15 +59,15 @@ async function ensureDailySheetExists(sheets, spreadsheetId, tabName) {
     range: headerRange,
     valueInputOption: 'RAW',
     requestBody: {
-      values: [['Thời gian', 'Nội dung']],
+      values: [['Time', 'Content']],
     },
   });
   return true;
 }
 
 /**
- * Ghi một dòng lên tab **theo ngày** (tự tạo tab mới mỗi ngày nếu chưa có).
- * Cột A = ISO timestamp, cột B = nội dung (RAW).
+ * Append one row to the **daily** tab (creates a new tab each day if missing).
+ * Column A = ISO timestamp, column B = content (RAW).
  * @param {string} clipboardText
  */
 export async function appendClipboardToSheet(clipboardText) {
@@ -75,13 +75,13 @@ export async function appendClipboardToSheet(clipboardText) {
     const target = await loadSheetSyncTarget();
     if (!target) {
       throw new Error(
-        'Chưa có Spreadsheet ID. Chạy copyhub login (trang cài đặt) hoặc copyhub config ... --sheet-id <ID>.',
+        'No Spreadsheet ID. Run copyhub login (setup page) or copyhub config ... --sheet-id <ID>.',
       );
     }
 
     const auth = await getAuthorizedClient();
     if (!auth.credentials.refresh_token && !auth.credentials.access_token) {
-      throw new Error('Chưa đăng nhập. Chạy: copyhub login');
+      throw new Error('Not signed in. Run: copyhub login');
     }
 
     const sheets = google.sheets({ version: 'v4', auth });

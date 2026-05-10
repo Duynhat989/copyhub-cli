@@ -1,7 +1,7 @@
 import { execSync } from 'node:child_process';
 
 /**
- * Dừng tiến trình và (Windows) toàn bộ cây con (Electron overlay).
+ * Stop process and (Windows) entire child tree (Electron overlay).
  * @param {number} pid
  */
 export function killDaemonTree(pid) {

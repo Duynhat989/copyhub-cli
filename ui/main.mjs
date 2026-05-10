@@ -22,10 +22,10 @@ if (!gotLock) {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/** Đặt 1 để cửa sổ không tự ẩn khi click ra ngoài (chỉ Esc / chọn dòng copy). */
+/** Set to 1 so the window does not hide on blur (only Esc / pick row to copy). */
 const STICKY_NO_BLUR = process.env.COPYHUB_OVERLAY_STICKY === '1';
 
-/** Electron Accelerator: dùng `Control` không viết `Ctrl`; `CommandOrControl` = Ctrl (Win) / Cmd (Mac). */
+/** Electron Accelerator: use `Control`, not `Ctrl`; `CommandOrControl` = Ctrl (Win) / Cmd (Mac). */
 function normalizeAccelerator(raw) {
   if (!raw || typeof raw !== 'string') return '';
   let s = raw.trim();
@@ -38,10 +38,10 @@ function normalizeAccelerator(raw) {
 const DEFAULT_ACCEL = 'CommandOrControl+Shift+H';
 const HIDE_ON_START = process.env.COPYHUB_OVERLAY_HIDE_ON_START === '1';
 
-/** Chiều ngang cửa overlay (~70% so với 460px). */
+/** Overlay width (~70% of 460px baseline). */
 const OVERLAY_WIDTH = Math.round(460 * 0.7);
 
-/** Cho UI / IPC: phím đã đăng ký và phím bạn gõ trong .env */
+/** For UI / IPC: registered shortcut and raw value from .env */
 let overlayHotkeyMeta = {
   accelerator: '',
   usedFallback: false,
@@ -50,11 +50,11 @@ let overlayHotkeyMeta = {
 
 let win = null;
 let tray = null;
-/** Tránh ẩn ngay khi vừa mở (WM). */
+/** Avoid hiding immediately after show (WM quirks). */
 let blurHideEnabled = false;
 
 /**
- * Luôn trên cùng mọi app: mức screen-saver (cao nhất Electron), moveTop, hiện trên mọi workspace.
+ * Stay above other apps: screen-saver level (highest in Electron), moveTop, all workspaces.
  * @param {BrowserWindow} w
  */
 function applyAlwaysOnTopStack(w) {
@@ -71,7 +71,7 @@ function applyAlwaysOnTopStack(w) {
   try {
     w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   } catch {
-    /* một số bản Linux không hỗ trợ */
+    /* unsupported on some Linux builds */
   }
   try {
     if (typeof w.moveTop === 'function') {
@@ -88,10 +88,10 @@ function createWindow() {
     height: 540,
     alwaysOnTop: true,
     show: false,
-    /** Không khung: bỏ title bar + menu (Windows/macOS). */
+    /** Frameless: no title bar + menu (Windows/macOS). */
     frame: false,
     roundedCorners: true,
-    /** Hiện trên taskbar để dễ tìm cửa sổ (đặt COPYHUB_OVERLAY_SKIP_TASKBAR=1 để ẩn khỏi taskbar). */
+    /** Show on taskbar for visibility (COPYHUB_OVERLAY_SKIP_TASKBAR=1 hides from taskbar). */
     skipTaskbar: process.env.COPYHUB_OVERLAY_SKIP_TASKBAR === '1',
     title: 'CopyHub',
     backgroundColor: '#ffffff',
@@ -146,7 +146,7 @@ function createWindow() {
 }
 
 /**
- * Đặt cửa sổ gần vị trí chuột (màn hình chứa con trỏ).
+ * Position window near cursor (display containing pointer).
  * @param {BrowserWindow} w
  */
 function placeWindowAtCursor(w) {
@@ -188,7 +188,7 @@ function toggleOverlay() {
 }
 
 /**
- * Đăng ký phím tắt: thử .env (đã chuẩn hóa) rồi mặc định CommandOrControl+Shift+H.
+ * Register global shortcut: try .env (normalized) then default CommandOrControl+Shift+H.
  * @returns {{ accelerator: string, usedFallback: boolean }}
  */
 function registerHotkeys() {
@@ -211,7 +211,7 @@ function registerHotkeys() {
         return { accelerator: acc, usedFallback };
       }
     } catch (e) {
-      console.warn('Accelerator không hợp lệ:', acc, /** @type {Error} */ (e).message);
+      console.warn('Invalid accelerator:', acc, /** @type {Error} */ (e).message);
     }
     try {
       globalShortcut.unregister(acc);
@@ -260,14 +260,14 @@ function registerTray() {
   tray = new Tray(icon);
   tray.setToolTip('CopyHub overlay');
   const accLabel = overlayHotkeyMeta.accelerator
-    ? `Phím tắt: ${overlayHotkeyMeta.accelerator}`
-    : 'Phím tắt: (xem terminal)';
+    ? `Shortcut: ${overlayHotkeyMeta.accelerator}`
+    : 'Shortcut: (see terminal)';
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: accLabel, enabled: false },
-      { label: 'Mở lịch sử (luôn trên cùng)', click: () => toggleOverlay() },
+      { label: 'Open history (always on top)', click: () => toggleOverlay() },
       { type: 'separator' },
-      { label: 'Thoát', click: () => app.quit() },
+      { label: 'Quit', click: () => app.quit() },
     ]),
   );
   tray.on('click', () => toggleOverlay());
@@ -293,35 +293,35 @@ if (gotLock) {
         '',
     };
     if (accelerator) {
-      console.log('CopyHub overlay — phím tắt đang dùng:', accelerator);
-      console.log('Gợi ý Windows: Ctrl+Shift+H (CommandOrControl+Shift+H).');
+      console.log('CopyHub overlay — shortcut in use:', accelerator);
+      console.log('Windows tip: Ctrl+Shift+H (CommandOrControl+Shift+H).');
       if (usedFallback) {
         console.warn(
-          'Phím COPYHUB_OVERLAY_ACCELERATOR không đăng ký được. Đã dùng mặc định CommandOrControl+Shift+H.',
+          'COPYHUB_OVERLAY_ACCELERATOR could not be registered. Using default CommandOrControl+Shift+H.',
         );
-        console.warn('Để trống COPYHUB_OVERLAY_ACCELERATOR trong .env = luôn dùng Ctrl+Shift+H.');
+        console.warn('Leave COPYHUB_OVERLAY_ACCELERATOR unset in .env to always use Ctrl+Shift+H.');
       }
     } else {
       console.error(
-        'Không đăng ký được phím tắt. Mở lịch sử bằng icon khay hoặc taskbar (CopyHub — Lịch sử).',
+        'Could not register a global shortcut. Open history from the tray or taskbar icon.',
       );
     }
 
     console.log(
       STICKY_NO_BLUR
-        ? 'COPYHUB_OVERLAY_STICKY=1 — cửa sổ không tự đóng khi click ngoài (chỉ Esc / chọn dòng).'
-        : 'Overlay: mở gần chuột; click ra ngoài cửa sổ để đóng. Esc cũng đóng. COPYHUB_OVERLAY_STICKY=1 để bám (không đóng khi blur).',
+        ? 'COPYHUB_OVERLAY_STICKY=1 — window does not close on outside click (Esc / row pick only).'
+        : 'Overlay: opens near cursor; click outside the window to close. Esc closes too. COPYHUB_OVERLAY_STICKY=1 keeps it open on blur.',
     );
     console.log(
       HIDE_ON_START
-        ? 'COPYHUB_OVERLAY_HIDE_ON_START=1 — cửa sổ chỉ mở bằng phím / khay.'
-        : 'Cửa sổ mở khi khởi động; tìm trên taskbar hoặc khay nếu không thấy.',
+        ? 'COPYHUB_OVERLAY_HIDE_ON_START=1 — window opens only via shortcut / tray.'
+        : 'Window shows on startup; check taskbar or tray if you do not see it.',
     );
 
     try {
       registerTray();
     } catch (e) {
-      console.warn('Không tạo được icon khay hệ thống:', /** @type {Error} */ (e).message);
+      console.warn('Could not create system tray icon:', /** @type {Error} */ (e).message);
     }
   });
 

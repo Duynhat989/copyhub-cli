@@ -7,7 +7,7 @@ export function getProjectRoot() {
   return join(dirname(fileURLToPath(import.meta.url)), '..');
 }
 
-/** Đường dẫn electron.exe (Windows) / Electron (macOS) sau khi postinstall tải xong. */
+/** Path to electron.exe (Windows) / Electron (macOS) after npm postinstall download. */
 export function resolveElectronBinary() {
   const root = getProjectRoot();
   const pathTxt = join(root, 'node_modules', 'electron', 'path.txt');
@@ -19,7 +19,7 @@ export function resolveElectronBinary() {
 }
 
 /**
- * Khởi chạy cửa sổ nổi lịch sử (Electron).
+ * Spawn the floating history overlay (Electron).
  * @param {{ stdio?: 'inherit' | 'ignore' | 'pipe', envExtra?: Record<string, string> }} [opts]
  */
 export function spawnCopyhubOverlay(opts = {}) {

@@ -35,20 +35,20 @@ import { runCopyhubDaemon } from './start-daemon-logic.js';
 const CLI_JS = fileURLToPath(new URL('./cli.js', import.meta.url));
 
 program.name('copyhub').description(
-  'CopyHub — clipboard, lịch sử nổi, đồng bộ Google Sheets (tab COPYHUB-ngày). Windows, macOS, Linux.',
+  'CopyHub — clipboard, overlay history, Google Sheets sync (COPYHUB-daily tabs). Windows, macOS, Linux.',
 );
 
 program
   .command('config')
-  .description('Lưu Client ID / Secret (và tuỳ chọn Sheet ID) vào ~/.copyhub/config.json')
+  .description('Save Client ID / Secret (optional Sheet ID) to ~/.copyhub/config.json')
   .requiredOption('--client-id <id>', 'OAuth 2.0 Client ID')
   .requiredOption('--client-secret <secret>', 'OAuth 2.0 Client Secret')
   .option(
     '--redirect-port <port>',
-    `Cổng localhost callback OAuth (mặc định ${DEFAULT_OAUTH_REDIRECT_PORT})`,
+    `Localhost OAuth callback port (default ${DEFAULT_OAUTH_REDIRECT_PORT})`,
     (v) => parseInt(v, 10),
   )
-  .option('--sheet-id <id>', 'Google Spreadsheet ID (URL .../d/<ID>/edit); có thể nhập sau copyhub login')
+  .option('--sheet-id <id>', 'Google Spreadsheet ID (URL .../d/<ID>/edit); can be set later via copyhub login')
   .action(async (opts) => {
     const port =
       typeof opts.redirectPort === 'number' && !Number.isNaN(opts.redirectPort)
@@ -62,17 +62,17 @@ program
     };
     if (opts.sheetId) payload.googleSheetId = opts.sheetId;
     await saveConfig(payload);
-    console.log(`Đã lưu cấu hình: ${CONFIG_PATH}`);
+    console.log(`Saved configuration: ${CONFIG_PATH}`);
     console.log(
-      `Trong Google Cloud Console, thêm URI chuyển hướng: http://127.0.0.1:${port}/oauth2callback`,
+      `In Google Cloud Console, add redirect URI: http://127.0.0.1:${port}/oauth2callback`,
     );
-    console.log('Bật API: Google Sheets API cho cùng project OAuth.');
+    console.log('Enable Google Sheets API for the same OAuth project.');
   });
 
 program
   .command('login')
   .description(
-    `Đăng nhập Google (OAuth Sheets), sau đó mở trang cài đặt Spreadsheet ID — cổng ${DEFAULT_OAUTH_REDIRECT_PORT} hoặc ${ENV_OAUTH_REDIRECT_PORT}`,
+    `Google sign-in (OAuth Sheets), then Spreadsheet ID setup page — port ${DEFAULT_OAUTH_REDIRECT_PORT} or ${ENV_OAUTH_REDIRECT_PORT}`,
   )
   .action(async () => {
     await runLoginFlow();
@@ -80,16 +80,16 @@ program
 
 program
   .command('logout')
-  .description('Xóa token đã lưu')
+  .description('Remove saved tokens')
   .action(async () => {
     await clearTokens();
-    console.log(`Đã xóa token: ${TOKENS_PATH}`);
+    console.log(`Removed tokens: ${TOKENS_PATH}`);
   });
 
 program
   .command('overlay')
   .description(
-    'Chỉ chạy cửa sổ Electron (khi không dùng copyhub start). macOS: có thể cần quyền Trợ năng.',
+    'Run only the Electron overlay window (without copyhub start). macOS may require Accessibility permissions.',
   )
   .action(() => {
     try {
@@ -107,48 +107,48 @@ program
 program
   .command('list')
   .alias('ls')
-  .description('Xem tiến trình CopyHub nền (copyhub start) có đang chạy không')
+  .description('Show whether the CopyHub background process (copyhub start) is running')
   .action(() => {
     pruneStaleRunState();
     const s = readRunState();
     if (!s) {
-      console.log('Không có tiến trình nền CopyHub (không thấy ~/.copyhub/run.json hoặc đã dọn).');
+      console.log('No CopyHub background process (no ~/.copyhub/run.json or already cleared).');
       return;
     }
     if (!isPidAlive(s.pid)) {
-      console.log(`PID ${s.pid} không còn sống — đã xóa run.json.`);
+      console.log(`PID ${s.pid} is not running — removed run.json.`);
       clearRunState();
       return;
     }
-    console.log('CopyHub nền đang chạy:');
+    console.log('CopyHub background process is running:');
     console.log(`  PID:        ${s.pid}`);
-    console.log(`  Bắt đầu:    ${s.startedAt || '(không rõ)'}`);
-    console.log(`  Dừng bằng:  copyhub stop`);
+    console.log(`  Started:    ${s.startedAt || '(unknown)'}`);
+    console.log(`  Stop with:  copyhub stop`);
   });
 
 program
   .command('stop')
-  .description('Dừng tiến trình nền do copyhub start (và overlay con)')
+  .description('Stop the background process started by copyhub start (and overlay child)')
   .action(() => {
     pruneStaleRunState();
     const s = readRunState();
     if (!s) {
-      console.log('Không có tiến trình nền để dừng.');
+      console.log('No background process to stop.');
       return;
     }
     if (!isPidAlive(s.pid)) {
-      console.log(`PID ${s.pid} không còn sống — đã dọn run.json.`);
+      console.log(`PID ${s.pid} is not running — cleared run.json.`);
       clearRunState();
       return;
     }
     killDaemonTree(s.pid);
     clearRunState();
-    console.log(`Đã dừng tiến trình PID ${s.pid}.`);
+    console.log(`Stopped process PID ${s.pid}.`);
   });
 
 program
   .command('status')
-  .description('Kiểm tra OAuth, Sheet và token')
+  .description('Check OAuth, Sheet, and tokens')
   .action(async () => {
     pruneStaleRunState();
     const cfg = await loadConfig();
@@ -157,70 +157,76 @@ program
     const src = describeOAuthCredentialSource();
 
     if (!cfg) {
-      console.log('Cấu hình OAuth: chưa');
+      console.log('OAuth config: missing');
       console.log(
-        `  Đặt ${ENV_GOOGLE_CLIENT_ID} và ${ENV_GOOGLE_CLIENT_SECRET} trong .env (xem .env.example), hoặc chạy: copyhub config`,
+        `  Set ${ENV_GOOGLE_CLIENT_ID} and ${ENV_GOOGLE_CLIENT_SECRET} in .env (see .env.example), or run: copyhub config`,
       );
     } else {
       const srcLabel =
-        src === 'env' ? 'biến môi trường / .env' : src === 'mixed' ? 'hỗn hợp .env + file config' : CONFIG_PATH;
-      console.log('Cấu hình OAuth: có');
-      console.log(`  Nguồn Client ID/Secret: ${srcLabel}`);
+        src === 'env'
+          ? 'environment / .env'
+          : src === 'mixed'
+            ? 'mixed .env + config file'
+            : CONFIG_PATH;
+      console.log('OAuth config: ok');
+      console.log(`  Client ID/Secret source: ${srcLabel}`);
       console.log(`  Callback: http://127.0.0.1:${cfg.redirectPort}/oauth2callback`);
     }
 
     if (!sheet) {
       console.log(
-        'Google Sheet: chưa — chạy copyhub login (trang cài đặt) hoặc copyhub config ... --sheet-id <ID>',
+        'Google Sheet: not set — run copyhub login (setup page) or copyhub config ... --sheet-id <ID>',
       );
     } else {
       const todayTab = dailySheetTabName();
       console.log(
-        `Google Sheet: có — ID …${sheet.spreadsheetId.slice(-8)} · tab hôm nay: "${todayTab}"`,
+        `Google Sheet: ok — ID …${sheet.spreadsheetId.slice(-8)} · today's tab: "${todayTab}"`,
       );
     }
 
     console.log(
       'Token:',
-      tok?.refresh_token || tok?.access_token ? `có (${TOKENS_PATH})` : 'chưa (chạy copyhub login)',
+      tok?.refresh_token || tok?.access_token ? `present (${TOKENS_PATH})` : 'missing (run copyhub login)',
     );
     if (existsSync(HISTORY_PATH)) {
-      console.log('Lịch sử:', HISTORY_PATH);
+      console.log('History:', HISTORY_PATH);
     }
 
     const plat = loadOverlayPlatformFromConfigSync();
     const platLabel =
-      plat === 'mac' ? 'macOS' : plat === 'linux' ? 'Linux' : plat === 'win' ? 'Windows' : '(chưa chọn)';
-    console.log(`Nền tảng cài đặt overlay: ${platLabel}`);
+      plat === 'mac' ? 'macOS' : plat === 'linux' ? 'Linux' : plat === 'win' ? 'Windows' : '(not set)';
+    console.log(`Overlay platform setting: ${platLabel}`);
 
     const envAccel = process.env.COPYHUB_OVERLAY_ACCELERATOR?.trim();
     const cfgAccel = loadOverlayAcceleratorFromConfigSync();
     if (envAccel) {
-      console.log(`Phím overlay (.env): ${envAccel}`);
+      console.log(`Overlay shortcut (.env): ${envAccel}`);
     } else if (cfgAccel) {
-      console.log(`Phím overlay (config): ${cfgAccel}`);
+      console.log(`Overlay shortcut (config): ${cfgAccel}`);
     } else {
-      console.log('Phím overlay: (mặc định Ctrl+Shift+H — đặt sau copyhub login hoặc COPYHUB_OVERLAY_ACCELERATOR)');
+      console.log(
+        'Overlay shortcut: (default Ctrl+Shift+H — set after copyhub login or COPYHUB_OVERLAY_ACCELERATOR)',
+      );
     }
 
     const run = readRunState();
     if (run && isPidAlive(run.pid)) {
-      console.log(`Tiến trình nền: có (PID ${run.pid}) — copyhub list`);
+      console.log(`Background process: yes (PID ${run.pid}) — copyhub list`);
     } else if (run) {
-      console.log('Tiến trình nền: run.json có nhưng PID không sống — chạy copyhub stop để dọn.');
+      console.log('Background process: run.json exists but PID is dead — run copyhub stop to clean up.');
     } else {
-      console.log('Tiến trình nền: không — copyhub start để chạy ngầm.');
+      console.log('Background process: no — copyhub start to run in background.');
     }
   });
 
 program
   .command('start')
   .description(
-    'Chạy Clipboard + Sheet + overlay nền (đóng CMD vẫn chạy). Chặn nếu đã có PID. --foreground để gắn terminal.',
+    'Run clipboard + Sheet + overlay in background (terminal can close). Blocks if PID already running. Use --foreground to attach to terminal.',
   )
-  .option('--no-sheet', 'Chỉ lưu cục bộ, không ghi Sheet')
-  .option('--no-overlay', 'Không mở Electron')
-  .option('--foreground', 'Chạy trực tiếp trong terminal (Ctrl+C dừng; không ghi PID nền)')
+  .option('--no-sheet', 'Local history only, do not write to Sheets')
+  .option('--no-overlay', 'Do not launch Electron')
+  .option('--foreground', 'Run in foreground (Ctrl+C stops; no background PID file)')
   .action(async (opts) => {
     pruneStaleRunState();
 
@@ -231,7 +237,7 @@ program
     const existing = readRunState();
     if (existing && isPidAlive(existing.pid)) {
       console.error(
-        `CopyHub đã chạy nền (PID ${existing.pid}). Xem: copyhub list — Dừng: copyhub stop`,
+        `CopyHub already running in background (PID ${existing.pid}). See: copyhub list — Stop: copyhub stop`,
       );
       process.exit(1);
     }
@@ -240,7 +246,7 @@ program
     }
 
     if (opts.foreground) {
-      console.log('CopyHub chế độ foreground. Ctrl+C để dừng.');
+      console.log('CopyHub foreground mode. Press Ctrl+C to stop.');
       await ensureDir();
 
       const ctrl = await runCopyhubDaemon({ useSheet, skipOverlay });
@@ -267,7 +273,7 @@ program
     child.unref();
 
     if (!child.pid) {
-      console.error('Không spawn được tiến trình nền.');
+      console.error('Could not spawn background process.');
       process.exit(1);
     }
 
@@ -277,8 +283,8 @@ program
       foreground: false,
     });
 
-    console.log(`CopyHub đã chạy nền (PID ${child.pid}). Có thể đóng cửa sổ CMD.`);
-    console.log('Xem: copyhub list   |   Dừng: copyhub stop');
+    console.log(`CopyHub running in background (PID ${child.pid}). You may close this terminal.`);
+    console.log('Check: copyhub list   |   Stop: copyhub stop');
     process.exit(0);
   });
 
@@ -318,12 +324,12 @@ program
 program
   .command('commands')
   .alias('cmds')
-  .description('Liệt kê các lệnh CLI')
+  .description('List CLI commands')
   .action(() => {
     console.log(`copyhub config [--client-id ID] [--client-secret SEC] [--redirect-port P] [--sheet-id ID]
 copyhub login     | copyhub logout | copyhub status
 copyhub start [--no-sheet] [--no-overlay] [--foreground]
-      Mặc định chạy nền (đóng CMD vẫn chạy). Một instance — đã chạy thì start lại bị chặn.
+      Default runs in background (terminal can close). Single instance — second start is blocked.
 copyhub list (ls) | copyhub stop
 copyhub overlay   | copyhub commands / copyhub --help`);
   });

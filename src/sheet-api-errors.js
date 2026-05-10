@@ -12,7 +12,7 @@ function extractMessage(err) {
 }
 
 /**
- * Thông báo ngắn gọn cho lỗi Google Sheets API (đặc biệt API chưa bật).
+ * Short user-facing message for Google Sheets API errors (especially API disabled).
  * @param {unknown} err
  */
 export function formatGoogleSheetUserMessage(err) {
@@ -29,21 +29,21 @@ export function formatGoogleSheetUserMessage(err) {
       ? `https://console.cloud.google.com/apis/library/sheets.googleapis.com?project=${projectId}`
       : 'https://console.cloud.google.com/apis/library/sheets.googleapis.com';
     return (
-      `Google Sheets API chưa bật cho Cloud project${projectId ? ` ${projectId}` : ''}. ` +
-      `Mở Console → APIs & Services → Library → tìm "Google Sheets API" → Enable. ` +
-      `Hoặc: ${enableUrl} — sau khi bật, đợi 1–3 phút rồi copy lại.`
+      `Google Sheets API is not enabled for Cloud project${projectId ? ` ${projectId}` : ''}. ` +
+      `Open Console → APIs & Services → Library → search "Google Sheets API" → Enable. ` +
+      `Or: ${enableUrl} — after enabling, wait 1–3 minutes then copy again.`
     );
   }
 
   if (/PERMISSION_DENIED|does not have permission|insufficient authentication scopes/i.test(msg)) {
     return (
-      'Không có quyền ghi vào bảng này. Hãy chia sẻ Google Sheet cho đúng tài khoản đã copyhub login, ' +
-      `hoặc chạy lại copyhub login. Chi tiết: ${msg}`
+      'No permission to write this spreadsheet. Share the Sheet with the Google account used for copyhub login, ' +
+      `or run copyhub login again. Details: ${msg}`
     );
   }
 
   if (/NOT_FOUND|not found|Unable to parse range|Requested entity was not found/i.test(msg)) {
-    return `Không tìm thấy spreadsheet hoặc vùng ô. Kiểm tra Spreadsheet ID trong ~/.copyhub/config.json. Chi tiết: ${msg}`;
+    return `Spreadsheet or range not found. Check Spreadsheet ID in ~/.copyhub/config.json. Details: ${msg}`;
   }
 
   return msg;

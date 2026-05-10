@@ -13,7 +13,7 @@ import { spawnCopyhubOverlay } from './electron-launcher.js';
  */
 
 /**
- * Chạy watcher (+ overlay tuỳ chọn). Gọi onShutdown khi SIGINT/SIGTERM trước khi thoát.
+ * Run clipboard watcher (+ optional overlay); logs via io (defaults to console).
  * @param {StartDaemonOptions} opts
  * @param {{ log: typeof console.log, warn: typeof console.warn, error: typeof console.error }} io
  */
@@ -26,17 +26,17 @@ export async function runCopyhubDaemon(opts, io = console) {
 
   if (useSheet && !sheetTarget) {
     io.warn(
-      'Chưa có Spreadsheet ID trong ~/.copyhub/config.json — chạy copyhub login hoặc copyhub config ... --sheet-id <ID>',
+      'No Spreadsheet ID in ~/.copyhub/config.json — run copyhub login or copyhub config ... --sheet-id <ID>',
     );
   }
   if (useSheet && sheetTarget && !tokens?.refresh_token && !tokens?.access_token) {
-    io.warn('Chưa có token OAuth — chỉ lưu cục bộ. Chạy copyhub login.');
+    io.warn('No OAuth token — local history only. Run copyhub login.');
   }
 
-  io.log('CopyHub daemon đang chạy.');
-  io.log('Thư mục dữ liệu:', DIR);
+  io.log('CopyHub daemon running.');
+  io.log('Data directory:', DIR);
   if (sheetTarget) {
-    io.log(`Sheet: tab mỗi ngày "${dailySheetTabName()}".`);
+    io.log(`Sheet: daily tab "${dailySheetTabName()}".`);
   }
 
   /** @type {import('node:child_process').ChildProcess | null} */
@@ -50,20 +50,20 @@ export async function runCopyhubDaemon(opts, io = console) {
         envExtra: { COPYHUB_SPAWNED_BY_START: '1' },
       });
       overlayProc.on('error', (err) => {
-        io.warn('Không khởi động được overlay Electron:', err.message);
+        io.warn('Could not start Electron overlay:', err.message);
         overlayProc = null;
       });
       overlayProc.on('exit', (code, sig) => {
         if (!overlayStoppingWithCli && code != null && code !== 0) {
           io.warn(
-            `Overlay Electron thoát (mã ${code}). Chạy copyhub overlay hoặc khởi động lại copyhub start.`,
+            `Electron overlay exited (code ${code}). Run copyhub overlay or restart copyhub start.`,
           );
         }
         overlayProc = null;
       });
-      io.log('Đã khởi động cửa sổ lịch sử (Electron).');
+      io.log('Started history overlay (Electron).');
     } catch (e) {
-      io.warn('Không khởi động được overlay:', /** @type {Error} */ (e).message);
+      io.warn('Could not start overlay:', /** @type {Error} */ (e).message);
     }
   }
 
@@ -79,7 +79,7 @@ export async function runCopyhubDaemon(opts, io = console) {
         await appendClipboardToSheet(text);
         synced = true;
         lastSheetLogKey = '';
-        io.log(`[${new Date().toISOString()}] Đã ghi dòng lên Google Sheet (tab ngày).`);
+        io.log(`[${new Date().toISOString()}] Appended row to Google Sheet (daily tab).`);
       } catch (e) {
         const msg = /** @type {Error} */ (e).message;
         const now = Date.now();
@@ -87,14 +87,14 @@ export async function runCopyhubDaemon(opts, io = console) {
         if (key !== lastSheetLogKey || now - lastSheetLogAt > 120_000) {
           lastSheetLogKey = key;
           lastSheetLogAt = now;
-          io.error(`[${new Date().toISOString()}] Lỗi Google Sheet:`, msg);
+          io.error(`[${new Date().toISOString()}] Google Sheet error:`, msg);
         }
       }
     }
     await appendHistory({ text, syncedToSheet: synced });
     const oneLine = text.replace(/\r?\n/g, '\\n').slice(0, 120);
     io.log(
-      `[${new Date().toISOString()}] Đã lưu (${text.length} ký tự): ${oneLine}${text.length > 120 ? '…' : ''}`,
+      `[${new Date().toISOString()}] Saved (${text.length} chars): ${oneLine}${text.length > 120 ? '…' : ''}`,
     );
   });
 
