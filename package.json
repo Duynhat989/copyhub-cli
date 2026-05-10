@@ -1,0 +1,39 @@
+{
+  "name": "copyhub",
+  "version": "1.0.0",
+  "description": "CopyHub — clipboard, lưu cục bộ, đồng bộ Google Sheets (OAuth). Windows, macOS, Linux.",
+  "type": "module",
+  "bin": {
+    "copyhub": "./src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js start",
+    "login": "node src/cli.js login",
+    "overlay": "node src/cli.js overlay"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "clipboard",
+    "google-sheets",
+    "oauth",
+    "sync",
+    "cli",
+    "cross-platform",
+    "windows",
+    "linux",
+    "macos"
+  ],
+  "files": ["src", "ui", ".env.example"],
+  "license": "MIT",
+  "dependencies": {
+    "clipboardy": "^4.0.0",
+    "dotenv": "^16.4.5",
+    "electron": "^33.2.0",
+    "commander": "^12.1.0",
+    "google-auth-library": "^9.15.0",
+    "googleapis": "^144.0.0",
+    "open": "^10.1.0"
+  }
+}

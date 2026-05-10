@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CopyHub</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --surface: #f8f9fc;
+      --surface-hover: #f0f2f7;
+      --border: #e6e8ef;
+      --text: #1a1d26;
+      --text-muted: #5c6370;
+      --text-faint: #8b919d;
+      --accent: #3d5afe;
+      --accent-soft: rgba(61, 90, 254, 0.08);
+      --shadow: 0 1px 3px rgba(26, 29, 38, 0.06), 0 1px 2px rgba(26, 29, 38, 0.04);
+      --shadow-hover: 0 4px 14px rgba(26, 29, 38, 0.08), 0 2px 6px rgba(26, 29, 38, 0.05);
+      --radius: 12px;
+      --scrollbar-track: #f0f2f5;
+      --scrollbar-thumb: #c5cad6;
+      --scrollbar-thumb-hover: #a8afc0;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      border-radius: 10px;
+      /* Viền nhẹ cho cửa sổ frameless */
+      box-shadow: inset 0 0 0 1px var(--border);
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Vùng kéo cửa sổ (Electron); không chiếm menu/title — chỉ một dải mỏng */
+    #drag-strip {
+      flex-shrink: 0;
+      height: 32px;
+      -webkit-app-region: drag;
+      app-region: drag;
+      background: linear-gradient(180deg, #fafbfc 0%, var(--bg) 100%);
+      border-bottom: 1px solid var(--border);
+      border-radius: 10px 10px 0 0;
+      cursor: grab;
+    }
+
+    #drag-strip:active {
+      cursor: grabbing;
+    }
+
+    #list {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 10px 12px 14px;
+      -webkit-app-region: no-drag;
+      app-region: no-drag;
+
+      scrollbar-width: thin;
+      scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+    }
+
+    #list::-webkit-scrollbar {
+      width: 8px;
+    }
+
+    #list::-webkit-scrollbar-track {
+      background: var(--scrollbar-track);
+      border-radius: 100px;
+      margin: 6px 0;
+    }
+
+    #list::-webkit-scrollbar-thumb {
+      background: var(--scrollbar-thumb);
+      border-radius: 100px;
+      border: 2px solid var(--scrollbar-track);
+      background-clip: padding-box;
+      min-height: 40px;
+    }
+
+    #list::-webkit-scrollbar-thumb:hover {
+      background: var(--scrollbar-thumb-hover);
+      border-color: var(--scrollbar-track);
+      background-clip: padding-box;
+    }
+
+    #list::-webkit-scrollbar-corner {
+      background: transparent;
+    }
+
+    .row {
+      padding: 12px 14px;
+      margin-bottom: 10px;
+      border-radius: var(--radius);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      cursor: pointer;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    }
+
+    .row:last-child {
+      margin-bottom: 2px;
+    }
+
+    .row:hover {
+      border-color: rgba(61, 90, 254, 0.35);
+      background: var(--surface-hover);
+      box-shadow: var(--shadow-hover);
+    }
+
+    .row:active {
+      transform: scale(0.995);
+    }
+
+    .row .ts {
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      color: var(--text-faint);
+      letter-spacing: 0.02em;
+      margin-bottom: 6px;
+    }
+
+    .row .txt {
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 5.2em;
+      overflow: hidden;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text);
+      line-height: 1.4;
+    }
+
+    .row .sync {
+      font-size: 11px;
+      color: var(--accent);
+      margin-top: 8px;
+      font-weight: 500;
+    }
+
+    .row:not(.synced) .sync {
+      display: none;
+    }
+
+    #empty {
+      padding: 28px 18px;
+      text-align: center;
+      font-size: 13px;
+      line-height: 1.65;
+      color: var(--text-muted);
+      max-width: 320px;
+      margin: 0 auto;
+    }
+
+    #err {
+      color: #b71c1c;
+      background: #ffebee;
+      border: 1px solid #ffcdd2;
+      padding: 12px 14px;
+      margin: 8px 12px;
+      border-radius: var(--radius);
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div id="drag-strip" title="Kéo để di chuyển cửa sổ"></div>
+  <div id="list"></div>
+  <script>
+    const listEl = document.getElementById('list');
+
+    async function refresh() {
+      listEl.innerHTML = '';
+      const res = await window.copyhub.getHistory();
+      if (res && res.error) {
+        const e = document.createElement('div');
+        e.id = 'err';
+        e.textContent = res.error;
+        listEl.appendChild(e);
+        return;
+      }
+      const rows = res && Array.isArray(res.items) ? res.items : [];
+      if (!rows.length) {
+        const d = document.createElement('div');
+        d.id = 'empty';
+        d.textContent =
+          'Chưa có lịch sử — chạy copyhub start rồi copy. Chọn một dòng để copy lại; click ra ngoài hoặc Esc để đóng.';
+        listEl.appendChild(d);
+        return;
+      }
+      for (const r of rows) {
+        const div = document.createElement('div');
+        div.className = 'row' + (r.synced ? ' synced' : '');
+        div.innerHTML =
+          '<div class="ts"></div><div class="txt"></div><div class="sync"></div>';
+        div.querySelector('.ts').textContent = r.ts || '';
+        div.querySelector('.txt').textContent = r.text || '';
+        div.querySelector('.sync').textContent = 'Đã đồng bộ Sheet';
+        div.addEventListener('click', () => {
+          window.copyhub.copyPick(r.text || '');
+        });
+        listEl.appendChild(div);
+      }
+    }
+
+    window.copyhub.onOpen(() => {
+      void refresh();
+    });
+    void refresh();
+  </script>
+</body>
+</html>
