@@ -8,10 +8,13 @@ import {
   DEFAULT_OAUTH_REDIRECT_PORT,
   ENV_GOOGLE_CLIENT_ID,
   ENV_GOOGLE_CLIENT_SECRET,
+  ENV_OAUTH_REDIRECT_PORT,
   mergeConfigPartial,
+  resolveOAuthListenPort,
   loadSheetSyncTarget,
   loadOverlayAcceleratorFromConfigSync,
   loadOverlayPlatformFromConfigSync,
+  sanitizeOAuthCredentialInput,
 } from './config.js';
 import { saveTokens, loadTokens } from './tokens.js';
 import { TOKENS_PATH } from './paths.js';
@@ -34,7 +37,7 @@ export async function getAuthorizedClient() {
   const cfg = await loadConfig();
   if (!cfg) {
     throw new Error(
-      `OAuth is not configured. Set ${ENV_GOOGLE_CLIENT_ID} and ${ENV_GOOGLE_CLIENT_SECRET} (.env or environment), or run: copyhub config --client-id ID --client-secret SECRET`,
+      `OAuth is not configured. Set ${ENV_GOOGLE_CLIENT_ID} and ${ENV_GOOGLE_CLIENT_SECRET} (.env or environment), run copyhub config, or copyhub login (browser wizard).`,
     );
   }
   const client = createOAuthClient(cfg);
@@ -75,21 +78,327 @@ function escapeHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
+/**
+ * User-visible explanation when exchanging auth code for tokens fails (e.g. invalid_client).
+ * @param {unknown} err
+ */
+function formatOAuthTokenExchangeMessage(err) {
+  const g = /** @type {{ response?: { data?: { error?: string; error_description?: string } } } } */ (
+    err
+  );
+  const code = g.response?.data?.error;
+  const desc = (g.response?.data?.error_description || '').trim();
+  const fallback = /** @type {Error} */ (err)?.message || String(err);
+
+  if (code === 'invalid_client') {
+    const secretInvalid = /client secret is invalid|invalid_client_secret/i.test(desc);
+    const secretHint = secretInvalid
+      ? 'Google says the Client Secret is wrong for this Client ID. Open Cloud Console → APIs & Services → Credentials → your Web client → reset secret or download JSON again; paste client_id and client_secret from that JSON into the CopyHub wizard (Safari/Chrome may autofill an old secret — clear fields first). '
+      : '';
+    return (
+      'OAuth invalid_client: Google rejected the Client ID / Client Secret pair. ' +
+      secretHint +
+      'Use OAuth client type "Web application" and add redirect URI http://127.0.0.1:<port>/oauth2callback (port matches CopyHub). Prefer pasting values from the client\'s Download JSON file to avoid typos. ' +
+      'If COPYHUB_GOOGLE_CLIENT_ID / COPYHUB_GOOGLE_CLIENT_SECRET exist in shell or ~/.copyhub/.env, they must match this client or remove both so ~/.copyhub/config.json is used. ' +
+      (desc ? `Google says: ${desc}` : `(${fallback})`)
+    );
+  }
+
+  if (code === 'invalid_grant') {
+    return (
+      'OAuth invalid_grant: the authorization code expired or was already used. Close extra browser tabs and run copyhub login again.' +
+      (desc ? ` ${desc}` : '')
+    );
+  }
+
+  return desc ? `${code || 'OAuth'}: ${desc}` : fallback;
+}
+
+/** @param {string} bodyText */
+function oauthTokenExchangeErrorPage(bodyText) {
+  const esc = escapeHtml(bodyText);
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>CopyHub OAuth error</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f0f4fa;padding:24px;}
+.box{background:#fff;padding:28px 32px;border-radius:14px;max-width:520px;box-shadow:0 4px 24px rgba(20,24,36,.08);line-height:1.55;color:#141824;}
+h1{font-size:1.15rem;margin:0 0 12px;}
+pre{white-space:pre-wrap;word-break:break-word;background:#f8fafc;padding:12px 14px;border-radius:8px;font-size:13px;color:#334155;border:1px solid #e2e8f0;}
+code{background:#eff6ff;padding:2px 8px;border-radius:6px;font-size:13px;}
+</style></head><body><div class="box"><h1>Could not finish sign-in</h1><pre>${esc}</pre>
+<p style="margin-top:16px;color:#64748b;font-size:14px;">Fix the issue, then run <code>copyhub login</code> again.</p></div></body></html>`;
+}
+
+/**
+ * @param {string} bootstrapToken
+ * @param {number} listenPort
+ */
+function credentialSetupPageHtml(bootstrapToken, listenPort) {
+  const tVal = escapeHtml(bootstrapToken);
+  const callbackUri = `http://127.0.0.1:${listenPort}/oauth2callback`;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CopyHub — Google OAuth credentials</title>
+  <style>
+    :root {
+      --text: #141824;
+      --muted: #5a6272;
+      --line: #e2e8f1;
+      --accent: #2563eb;
+      --accent-soft: #eff6ff;
+      --radius: 14px;
+      --shadow: 0 4px 24px rgba(20, 24, 36, 0.08), 0 1px 3px rgba(20, 24, 36, 0.04);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(160deg, #e8eef9 0%, #f5f7fb 45%, #eef2f8 100%);
+      color: var(--text);
+      padding: 32px 16px 48px;
+      line-height: 1.55;
+    }
+    .wrap { max-width: 520px; margin: 0 auto; }
+    .brand {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+    h1 { font-size: 1.55rem; font-weight: 700; margin: 0 0 8px; letter-spacing: -0.02em; }
+    .sub { color: var(--muted); font-size: 15px; margin-bottom: 24px; }
+    .card {
+      background: #fff;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      border: 1px solid rgba(255,255,255,0.8);
+      padding: 26px 24px;
+      margin-bottom: 18px;
+    }
+    label.field-label { display: block; font-weight: 600; font-size: 14px; margin-bottom: 8px; }
+    input[type="password"], input[type="text"] {
+      width: 100%;
+      padding: 12px 14px;
+      font-size: 15px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fafbfd;
+    }
+    input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+      background: #fff;
+    }
+    .hint { font-size: 13px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+    .hint code {
+      font-size: 12px;
+      background: var(--accent-soft);
+      color: #1d4ed8;
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-weight: 500;
+    }
+    button.submit {
+      width: 100%;
+      margin-top: 20px;
+      padding: 14px 20px;
+      font-size: 16px;
+      font-weight: 600;
+      color: #fff;
+      background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+    }
+    button.submit:hover { filter: brightness(1.05); }
+    .callback-box {
+      font-size: 13px;
+      padding: 12px 14px;
+      background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand">CopyHub</div>
+    <h1>Google Cloud OAuth</h1>
+    <p class="sub">Paste your OAuth 2.0 Client ID and Client Secret (same as <code>${ENV_GOOGLE_CLIENT_ID}</code> / <code>${ENV_GOOGLE_CLIENT_SECRET}</code> in <code>.env</code>). Stored in <code>~/.copyhub/config.json</code>. After saving here, CopyHub uses this pair for sign-in — not leftover variables from shell or <code>.env</code>.</p>
+    <p class="hint" style="margin-bottom:20px;"><strong>Mac / Safari:</strong> copy from Google Cloud → Credentials → your <strong>Web client</strong> → <strong>Download JSON</strong> and paste <code>client_id</code> / <code>client_secret</code> exactly. Clear both fields if the browser autofills an old secret.</p>
+
+    <div class="card">
+      <p class="hint" style="margin-top:0;"><strong>Authorized redirect URI</strong> in Google Cloud Console must include:</p>
+      <div class="callback-box"><code>${escapeHtml(callbackUri)}</code></div>
+      <p class="hint">Port comes from <code>${ENV_OAUTH_REDIRECT_PORT}</code> (currently <strong>${listenPort}</strong>) or your saved config.</p>
+    </div>
+
+    <form method="POST" action="/credentials" autocomplete="off">
+      <input type="hidden" name="t" value="${tVal}" />
+      <div class="card">
+        <label class="field-label" for="cid">Client ID</label>
+        <input id="cid" type="text" name="clientId" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" required />
+        <label class="field-label" for="csec" style="margin-top:16px;">Client secret</label>
+        <input id="csec" type="text" name="clientSecret" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" required placeholder="Usually starts with GOCSPX-" />
+      </div>
+      <button type="submit" class="submit">Save and continue to Google sign-in</button>
+    </form>
+  </div>
+</body>
+</html>`;
+}
+
+const credentialSavedHtml = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>CopyHub</title>
+<style>
+body{font-family:system-ui,sans-serif;min-height:100vh;margin:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(160deg,#e8eef9,#f5f7fb);padding:24px;}
+.box{background:#fff;padding:32px 36px;border-radius:16px;box-shadow:0 8px 32px rgba(20,24,36,.1);max-width:420px;text-align:center;line-height:1.65;color:#141824;}
+.box h2{margin:0 0 12px;font-size:1.25rem;}
+.box p{margin:.6rem 0;color:#5a6272;font-size:15px;}
+.box code{background:#eff6ff;color:#1d4ed8;padding:2px 8px;border-radius:6px;font-size:13px;}
+</style></head>
+<body><div class="box"><h2>Credentials saved</h2>
+<p>The login flow will open Google next (this tab can stay open).</p></div></body></html>`;
+
+/**
+ * Localhost wizard when Client ID / Secret are missing from env and config file.
+ * @returns {Promise<void>}
+ */
+async function runCredentialBootstrap() {
+  const listenPort = resolveOAuthListenPort();
+  await new Promise((resolve, reject) => {
+    /** @type {string | null} */
+    let bootstrapToken = randomBytes(24).toString('hex');
+    let settled = false;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      server.close(() => resolve(undefined));
+    };
+
+    const server = createServer(async (req, res) => {
+      try {
+        if (!req.url) {
+          res.writeHead(400);
+          res.end('Bad request');
+          return;
+        }
+        const u = new URL(req.url, `http://127.0.0.1:${listenPort}`);
+
+        if (u.pathname === '/credentials' && req.method === 'GET') {
+          const t = u.searchParams.get('t');
+          if (!bootstrapToken || t !== bootstrapToken) {
+            res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end('<p>Invalid session. Run <code>copyhub login</code> again.</p>');
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(credentialSetupPageHtml(bootstrapToken, listenPort));
+          return;
+        }
+
+        if (u.pathname === '/credentials' && req.method === 'POST') {
+          let body = '';
+          try {
+            body = await readRequestBody(req);
+          } catch {
+            res.writeHead(413);
+            res.end('Payload too large');
+            return;
+          }
+          const params = new URLSearchParams(body);
+          const t = params.get('t');
+          if (!bootstrapToken || t !== bootstrapToken) {
+            res.writeHead(403);
+            res.end('Forbidden');
+            return;
+          }
+          const clientId = sanitizeOAuthCredentialInput(params.get('clientId'));
+          const clientSecret = sanitizeOAuthCredentialInput(params.get('clientSecret'));
+          if (!clientId || !clientSecret) {
+            res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end('<p>Client ID and Client secret are required.</p>');
+            return;
+          }
+          try {
+            await mergeConfigPartial({ clientId, clientSecret });
+          } catch {
+            res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end('<p>Could not write config. Check write permissions on ~/.copyhub/</p>');
+            return;
+          }
+          bootstrapToken = null;
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(credentialSavedHtml);
+          setTimeout(finish, 400);
+          return;
+        }
+
+        res.writeHead(404);
+        res.end('Not found');
+      } catch (e) {
+        res.writeHead(500);
+        res.end('Server error');
+        server.close(() => reject(/** @type {Error} */ (e)));
+      }
+    });
+
+    const idleMs = 20 * 60 * 1000;
+    const idleTimer = setTimeout(() => {
+      if (!settled) {
+        console.warn('Credential setup idle timeout (20 minutes).');
+        finish();
+      }
+    }, idleMs);
+    server.on('close', () => clearTimeout(idleTimer));
+
+    server.on('error', (err) => {
+      if (!settled) reject(err);
+    });
+
+    server.listen(listenPort, '127.0.0.1', async () => {
+      const credUrl = `http://127.0.0.1:${listenPort}/credentials?t=${encodeURIComponent(bootstrapToken)}`;
+      console.log('Opening browser for Google OAuth credentials (localhost wizard)...');
+      console.log(`If it does not open: ${credUrl}`);
+      try {
+        await open(credUrl);
+      } catch {
+        console.log('Open this URL manually:');
+        console.log(credUrl);
+      }
+    });
+  });
+}
+
 /** Shortcut presets (Electron Accelerator) per platform — embedded as JSON in the setup page. */
 const PLATFORM_PRESETS = {
   win: [
-    { label: 'Ctrl + Shift + H · recommended', value: 'CommandOrControl+Shift+H' },
-    { label: 'Control + Shift + H', value: 'Control+Shift+H' },
+    { label: 'Ctrl + Shift + H · recommended', value: 'Control+Shift+H' },
     { label: 'Alt + Shift + H', value: 'Alt+Shift+H' },
   ],
   mac: [
-    { label: '⌘ + Shift + H · recommended', value: 'CommandOrControl+Shift+H' },
-    { label: 'Command + Shift + H', value: 'Command+Shift+H' },
+    {
+      label: '⌃ Control + Shift + H · recommended (Apple & PC keyboards)',
+      value: 'Control+Shift+H',
+    },
+    {
+      label: '⌘ Command + Shift + H',
+      value: 'Command+Shift+H',
+    },
     { label: '⌘ + Shift + V', value: 'Command+Shift+V' },
   ],
   linux: [
-    { label: 'Ctrl + Shift + H · recommended', value: 'CommandOrControl+Shift+H' },
-    { label: 'Control + Shift + H', value: 'Control+Shift+H' },
+    { label: 'Ctrl + Shift + H · recommended', value: 'Control+Shift+H' },
     { label: 'Alt + Shift + H', value: 'Alt+Shift+H' },
   ],
 };
@@ -327,7 +636,7 @@ function setupPageHtml(setupToken, currentSheetId, currentAccelerator, currentPl
           <button type="button" class="platform-btn" data-platform="mac" aria-pressed="false">
             <span class="ico" aria-hidden="true">⌘</span>
             <span class="name">macOS</span>
-            <span class="tag">⌘ Command</span>
+            <span class="tag">⌃ Control default</span>
           </button>
           <button type="button" class="platform-btn" data-platform="linux" aria-pressed="false">
             <span class="ico" aria-hidden="true">🐧</span>
@@ -336,10 +645,10 @@ function setupPageHtml(setupToken, currentSheetId, currentAccelerator, currentPl
           </button>
         </div>
 
-        <label class="field-label" for="acc">Accelerator (blank = default Ctrl/⌘ + Shift + H)</label>
+        <label class="field-label" for="acc">Accelerator (blank = Control + Shift + H)</label>
         <input id="acc" type="text" name="overlayAccelerator" value="${accVal}" placeholder="Pick a preset below or type your own" autocomplete="off" spellcheck="false" />
 
-        <p class="hint">On Windows use <code>Control</code> in config, not <code>Ctrl</code>. Avoid <code>Control+Alt+…</code> (often grabbed by drivers).</p>
+        <p class="hint">Default everywhere: <code>Control+Shift+H</code> (⌃ or Ctrl + Shift + H — same key on Mac Apple keyboard & PC keyboard). On Windows type <code>Control</code> in config, not <code>Ctrl</code>. Avoid <code>Control+Alt+…</code> (often grabbed by drivers).</p>
         <p class="hint"><code>COPYHUB_OVERLAY_ACCELERATOR</code> in <code>.env</code>, if set, overrides this value.</p>
 
         <div id="chipRegion" class="chips" aria-live="polite"></div>
@@ -365,9 +674,9 @@ function setupPageHtml(setupToken, currentSheetId, currentAccelerator, currentPl
       var btns = document.querySelectorAll('.platform-btn');
 
       var hints = {
-        win: 'Windows: CommandOrControl = Ctrl.',
-        mac: 'macOS: CommandOrControl = ⌘ Command.',
-        linux: 'Linux: same as Windows with Ctrl; clipboard depends on your desktop.'
+        win: 'Windows: default Control+Shift+H.',
+        mac: 'macOS: default ⌃ Control+Shift+H (same as Ctrl on a PC keyboard). Use a ⌘ preset only if you prefer Command.',
+        linux: 'Linux: default Control+Shift+H; clipboard depends on your desktop.'
       };
 
       function setPlatform(p) {
@@ -423,10 +732,25 @@ body{font-family:system-ui,sans-serif;min-height:100vh;margin:0;display:flex;ali
  * @returns {Promise<void>}
  */
 export async function runLoginFlow() {
-  const cfg = await loadConfig();
+  let cfg = await loadConfig();
+  if (!cfg) {
+    const listenPort = resolveOAuthListenPort();
+    try {
+      await runCredentialBootstrap();
+    } catch (e) {
+      const code = /** @type {NodeJS.ErrnoException} */ (e)?.code;
+      if (code === 'EADDRINUSE') {
+        throw new Error(
+          `Port ${listenPort} is already in use. Stop the other process or set ${ENV_OAUTH_REDIRECT_PORT} to a free port.`,
+        );
+      }
+      throw /** @type {Error} */ (e);
+    }
+    cfg = await loadConfig();
+  }
   if (!cfg) {
     throw new Error(
-      `Not configured. Set ${ENV_GOOGLE_CLIENT_ID} and ${ENV_GOOGLE_CLIENT_SECRET} in .env, or run: copyhub config --client-id ... --client-secret ...`,
+      `OAuth is not configured. Set ${ENV_GOOGLE_CLIENT_ID} and ${ENV_GOOGLE_CLIENT_SECRET} in .env, run copyhub config, or complete the browser credential wizard.`,
     );
   }
   const port = cfg.redirectPort ?? DEFAULT_OAUTH_REDIRECT_PORT;
@@ -474,7 +798,18 @@ export async function runLoginFlow() {
             server.close(() => reject(new Error('Missing authorization code')));
             return;
           }
-          const { tokens } = await oauth2Client.getToken(code);
+          let tokens;
+          try {
+            const exchanged = await oauth2Client.getToken(code);
+            tokens = exchanged.tokens;
+          } catch (tokenErr) {
+            const msg = formatOAuthTokenExchangeMessage(tokenErr);
+            console.error('[CopyHub OAuth]', msg);
+            res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(oauthTokenExchangeErrorPage(msg));
+            server.close(() => reject(new Error(msg)));
+            return;
+          }
           oauth2Client.setCredentials(tokens);
           await saveTokens(tokens);
           setupToken = randomBytes(24).toString('hex');

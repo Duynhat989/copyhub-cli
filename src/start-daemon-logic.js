@@ -1,4 +1,4 @@
-import { appendHistory } from './storage.js';
+import { appendHistory, isDuplicateOfLatestHistory } from './storage.js';
 import { startClipboardWatcher } from './clipboard-watcher.js';
 import { appendClipboardToSheet } from './sheets.js';
 import { loadTokens } from './tokens.js';
@@ -73,6 +73,9 @@ export async function runCopyhubDaemon(opts, io = console) {
   let lastSheetLogAt = 0;
 
   const watcher = startClipboardWatcher(async (text) => {
+    if (isDuplicateOfLatestHistory(text)) {
+      return;
+    }
     let synced = false;
     if (useSheet && sheetTarget && (tokens?.refresh_token || tokens?.access_token)) {
       try {

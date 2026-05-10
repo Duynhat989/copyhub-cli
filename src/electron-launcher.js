@@ -18,30 +18,41 @@ export function resolveElectronBinary() {
   return abs;
 }
 
+function spawnOptsBase(stdio, cwd, env, detached) {
+  /** @type {import('node:child_process').SpawnOptions} */
+  const o = {
+    stdio,
+    cwd,
+    env,
+    detached,
+  };
+  if (process.platform === 'win32') {
+    o.windowsHide = true;
+  }
+  return o;
+}
+
 /**
  * Spawn the floating history overlay (Electron).
- * @param {{ stdio?: 'inherit' | 'ignore' | 'pipe', envExtra?: Record<string, string> }} [opts]
+ * @param {{
+ *   stdio?: 'inherit' | 'ignore' | 'pipe',
+ *   envExtra?: Record<string, string>,
+ *   detached?: boolean,
+ * }} [opts]
  */
 export function spawnCopyhubOverlay(opts = {}) {
   const stdio = opts.stdio ?? 'inherit';
+  const detached = opts.detached ?? false;
   const root = getProjectRoot();
   const uiMain = join(root, 'ui', 'main.mjs');
   const env = { ...process.env, ...opts.envExtra };
   const direct = resolveElectronBinary();
   if (direct) {
-    return spawn(direct, [uiMain], {
-      stdio,
-      cwd: root,
-      env,
-      detached: false,
-    });
+    return spawn(direct, [uiMain], spawnOptsBase(stdio, root, env, detached));
   }
   const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
   return spawn(npx, ['--yes', 'electron', uiMain], {
-    stdio,
-    cwd: root,
+    ...spawnOptsBase(stdio, root, env, detached),
     shell: true,
-    env,
-    detached: false,
   });
 }

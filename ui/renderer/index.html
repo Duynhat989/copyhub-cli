@@ -58,6 +58,53 @@
       cursor: grabbing;
     }
 
+    #list-wrap {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+    }
+
+    #list-loading {
+      flex-shrink: 0;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+      background: linear-gradient(90deg, var(--accent-soft), rgba(61, 90, 254, 0.02));
+      border-bottom: 1px solid var(--border);
+      -webkit-app-region: no-drag;
+      app-region: no-drag;
+      animation: hint-pulse 1.4s ease-in-out infinite;
+    }
+
+    #list-loading.visible {
+      display: flex;
+    }
+
+    #list-loading .spinner {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      border: 2px solid rgba(61, 90, 254, 0.35);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.65s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @keyframes hint-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.82; }
+    }
+
     #list {
       flex: 1;
       min-height: 0;
@@ -173,33 +220,173 @@
       border-radius: var(--radius);
       font-size: 13px;
     }
+
+    #pager {
+      flex-shrink: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 8px 12px 12px;
+      border-top: 1px solid var(--border);
+      background: linear-gradient(180deg, var(--bg) 0%, #fafbfc 100%);
+      -webkit-app-region: no-drag;
+      app-region: no-drag;
+    }
+
+    #pager.visible {
+      display: flex;
+    }
+
+    #pager button {
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    #pager button:hover:not(:disabled) {
+      background: var(--surface-hover);
+      border-color: rgba(61, 90, 254, 0.35);
+    }
+
+    #pager button:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    #pg-info {
+      font-size: 12px;
+      color: var(--text-muted);
+      min-width: 0;
+      text-align: center;
+      flex: 1;
+    }
+
+    .sheet-hint {
+      flex-shrink: 0;
+      font-size: 11px;
+      line-height: 1.45;
+      color: var(--text-muted);
+      padding: 6px 14px 4px;
+      text-align: center;
+      border-top: 1px solid var(--border);
+      background: var(--bg);
+      -webkit-app-region: no-drag;
+      app-region: no-drag;
+    }
+
+    .sheet-hint[hidden] {
+      display: none !important;
+    }
   </style>
 </head>
 <body>
   <div id="drag-strip" title="Drag to move window"></div>
-  <div id="list"></div>
+  <div id="list-wrap">
+    <div id="list-loading" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+      <span>Syncing Google Sheet…</span>
+    </div>
+    <div id="list"></div>
+  </div>
+  <div id="sheet-hint" class="sheet-hint" hidden></div>
+  <div id="pager" aria-label="Pagination">
+    <button type="button" id="pg-prev">Previous</button>
+    <span id="pg-info"></span>
+    <button type="button" id="pg-next">Next</button>
+  </div>
   <script>
     const listEl = document.getElementById('list');
+    const listLoadingEl = document.getElementById('list-loading');
+    const pagerEl = document.getElementById('pager');
+    const pgPrev = document.getElementById('pg-prev');
+    const pgNext = document.getElementById('pg-next');
+    const pgInfo = document.getElementById('pg-info');
+    const sheetHintEl = document.getElementById('sheet-hint');
 
-    async function refresh() {
+    const pageSize = 10;
+    let currentPage = 1;
+    /** @type {{ total: number, totalPages: number }} */
+    let lastPaging = { total: 0, totalPages: 1 };
+    let lastSheetHasMore = false;
+    let sheetSyncInFlight = false;
+
+    function setLoadingUi(on) {
+      listLoadingEl.classList.toggle('visible', on);
+    }
+
+    function syncPagerBar() {
+      const { total, totalPages } = lastPaging;
+      if (!total) return;
+      pgPrev.disabled = sheetSyncInFlight || currentPage <= 1;
+      pgNext.disabled =
+        sheetSyncInFlight ||
+        (currentPage * pageSize >= total && !lastSheetHasMore);
+      const from = (currentPage - 1) * pageSize + 1;
+      const to = Math.min(currentPage * pageSize, total);
+      const moreMark = lastSheetHasMore && currentPage * pageSize >= total ? '+' : '';
+      const pagesShown =
+        lastSheetHasMore && currentPage * pageSize >= total
+          ? Math.max(totalPages, currentPage + 1)
+          : totalPages;
+      pgInfo.textContent = `Page ${currentPage} / ${pagesShown} · ${from}–${to} of ${total}${moreMark}`;
+    }
+
+    function renderHistoryResponse(res) {
       listEl.innerHTML = '';
-      const res = await window.copyhub.getHistory();
+
       if (res && res.error) {
+        pagerEl.classList.remove('visible');
+        sheetHintEl.hidden = true;
         const e = document.createElement('div');
         e.id = 'err';
         e.textContent = res.error;
         listEl.appendChild(e);
+        lastPaging = { total: 0, totalPages: 1 };
+        lastSheetHasMore = false;
         return;
       }
+
+      lastSheetHasMore = Boolean(res.sheetHasMore);
+      currentPage = res.page ?? currentPage;
       const rows = res && Array.isArray(res.items) ? res.items : [];
-      if (!rows.length) {
+      const total = res.total ?? 0;
+      const totalPages = res.totalPages ?? 1;
+      lastPaging = { total, totalPages };
+
+      if (!total) {
+        pagerEl.classList.remove('visible');
+        if (res.sheetHint) {
+          sheetHintEl.hidden = false;
+          sheetHintEl.textContent = res.sheetHint;
+        } else {
+          sheetHintEl.hidden = true;
+        }
         const d = document.createElement('div');
         d.id = 'empty';
         d.textContent =
-          'No history yet — run copyhub start and copy something. Click a row to copy again; click outside or Esc to close.';
+          'No local history yet — run copyhub start and copy something. Click a row to copy again; click outside or Esc to close.';
         listEl.appendChild(d);
         return;
       }
+
+      if (res.sheetHint) {
+        sheetHintEl.hidden = false;
+        sheetHintEl.textContent = res.sheetHint;
+      } else {
+        sheetHintEl.hidden = true;
+      }
+
+      pagerEl.classList.add('visible');
+      syncPagerBar();
+
       for (const r of rows) {
         const div = document.createElement('div');
         div.className = 'row' + (r.synced ? ' synced' : '');
@@ -215,10 +402,72 @@
       }
     }
 
-    window.copyhub.onOpen(() => {
-      void refresh();
+    async function loadHistory(opt = {}) {
+      const refreshCache = Boolean(opt.refreshCache);
+      if (refreshCache) currentPage = 1;
+      if (typeof opt.page === 'number' && opt.page >= 1) {
+        currentPage = opt.page;
+      }
+
+      if (refreshCache) {
+        sheetSyncInFlight = true;
+        setLoadingUi(true);
+        pgPrev.disabled = true;
+        pgNext.disabled = true;
+
+        const quick = await window.copyhub.getHistoryLocal({
+          page: currentPage,
+          pageSize,
+        });
+
+        if (quick.error) {
+          sheetSyncInFlight = false;
+          setLoadingUi(false);
+          renderHistoryResponse(quick);
+          return;
+        }
+
+        currentPage = quick.page ?? currentPage;
+        renderHistoryResponse(quick);
+
+        try {
+          const full = await window.copyhub.getHistory({
+            page: currentPage,
+            pageSize,
+            refresh: true,
+          });
+          currentPage = full.page ?? currentPage;
+          renderHistoryResponse(full);
+        } finally {
+          sheetSyncInFlight = false;
+          setLoadingUi(false);
+          syncPagerBar();
+        }
+        return;
+      }
+
+      const res = await window.copyhub.getHistory({
+        page: currentPage,
+        pageSize,
+        refresh: false,
+      });
+      renderHistoryResponse(res);
+    }
+
+    pgPrev.addEventListener('click', () => {
+      if (sheetSyncInFlight || currentPage <= 1) return;
+      void loadHistory({ page: currentPage - 1 });
     });
-    void refresh();
+
+    pgNext.addEventListener('click', () => {
+      if (sheetSyncInFlight) return;
+      void loadHistory({ page: currentPage + 1 });
+    });
+
+    window.copyhub.onOpen(() => {
+      void loadHistory({ refreshCache: true });
+    });
   </script>
 </body>
 </html>
+

@@ -22,23 +22,94 @@ function parseRedirectPortFromEnv() {
   return n;
 }
 
+/**
+ * Strip invisible / stray characters from pasted OAuth credentials (fixes many Mac copy-paste issues).
+ * @param {unknown} raw
+ * @returns {string}
+ */
+export function sanitizeOAuthCredentialInput(raw) {
+  if (raw == null) return '';
+  let s = String(raw);
+  s = s.replace(/^\uFEFF/, '');
+  s = s.replace(/[\u200b-\u200d\u2060]/g, '');
+  s = s.replace(/\r/g, '');
+  s = s.replace(/[\u00a0\u202f\u2007]/g, ' ');
+  s = s.trim();
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    s = s.slice(1, -1).trim();
+  }
+  if (
+    (s.startsWith('\u201c') && s.endsWith('\u201d')) ||
+    (s.startsWith('\u2018') && s.endsWith('\u2019'))
+  ) {
+    s = s.slice(1, -1).trim();
+  }
+  return s;
+}
+
+/**
+ * Port for the OAuth HTTP listener (env wins, then saved config, then default).
+ * Does not require Client ID / Secret (used before credential bootstrap).
+ */
+export function resolveOAuthListenPort() {
+  const envPort = parseRedirectPortFromEnv();
+  if (envPort != null) return envPort;
+  if (existsSync(CONFIG_PATH)) {
+    try {
+      const j = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+      if (typeof j.redirectPort === 'number' && Number.isFinite(j.redirectPort)) {
+        return j.redirectPort;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return DEFAULT_OAUTH_REDIRECT_PORT;
+}
+
 /** Both Client ID and Secret come from environment (or .env). */
 export function hasOAuthCredentialsInEnv() {
-  const id = process.env[ENV_GOOGLE_CLIENT_ID]?.trim();
-  const sec = process.env[ENV_GOOGLE_CLIENT_SECRET]?.trim();
+  const id = sanitizeOAuthCredentialInput(process.env[ENV_GOOGLE_CLIENT_ID]);
+  const sec = sanitizeOAuthCredentialInput(process.env[ENV_GOOGLE_CLIENT_SECRET]);
   return Boolean(id && sec);
 }
 
-/** @returns {'env' | 'file' | 'mixed'} */
-export function describeOAuthCredentialSource() {
-  const idEnv = Boolean(process.env[ENV_GOOGLE_CLIENT_ID]?.trim());
-  const secEnv = Boolean(process.env[ENV_GOOGLE_CLIENT_SECRET]?.trim());
-  if (idEnv && secEnv) return 'env';
-  if (idEnv || secEnv) return 'mixed';
-  return 'file';
+/**
+ * Matches {@link loadConfig}: saved config.json pair wins over env when both are complete.
+ * @returns {string}
+ */
+export function describeEffectiveOAuthCredentialSource() {
+  let filePair = false;
+  if (existsSync(CONFIG_PATH)) {
+    try {
+      const j = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+      const id =
+        typeof j.clientId === 'string' ? sanitizeOAuthCredentialInput(j.clientId) : '';
+      const sec =
+        typeof j.clientSecret === 'string' ? sanitizeOAuthCredentialInput(j.clientSecret) : '';
+      filePair = Boolean(id && sec);
+    } catch {
+      /* ignore */
+    }
+  }
+  const envPair = hasOAuthCredentialsInEnv();
+
+  if (filePair) {
+    return envPair
+      ? `${CONFIG_PATH} (env COPYHUB_GOOGLE_* ignored for Client ID/Secret)`
+      : CONFIG_PATH;
+  }
+  if (envPair) return 'environment / .env (COPYHUB_GOOGLE_CLIENT_ID + SECRET)';
+  return '(none)';
 }
 
-/** @returns {Promise<CopyHubConfig | null>} */
+/**
+ * OAuth credentials: use env pair OR file pair only — never mix ID from one source with secret from another (Google returns invalid_client).
+ * @returns {Promise<CopyHubConfig | null>}
+ */
 export async function loadConfig() {
   /** @type {{ clientId?: string, clientSecret?: string, redirectPort?: number }} */
   const fromFile = {};
@@ -46,21 +117,22 @@ export async function loadConfig() {
   if (existsSync(CONFIG_PATH)) {
     const raw = await readFile(CONFIG_PATH, 'utf8');
     const j = JSON.parse(raw);
-    if (typeof j.clientId === 'string' && j.clientId) fromFile.clientId = j.clientId;
-    if (typeof j.clientSecret === 'string' && j.clientSecret) {
-      fromFile.clientSecret = j.clientSecret;
+    if (typeof j.clientId === 'string') {
+      const id = sanitizeOAuthCredentialInput(j.clientId);
+      if (id) fromFile.clientId = id;
+    }
+    if (typeof j.clientSecret === 'string') {
+      const sec = sanitizeOAuthCredentialInput(j.clientSecret);
+      if (sec) fromFile.clientSecret = sec;
     }
     if (typeof j.redirectPort === 'number' && Number.isFinite(j.redirectPort)) {
       fromFile.redirectPort = j.redirectPort;
     }
   }
 
-  const envId = process.env[ENV_GOOGLE_CLIENT_ID]?.trim();
-  const envSecret = process.env[ENV_GOOGLE_CLIENT_SECRET]?.trim();
+  const envId = sanitizeOAuthCredentialInput(process.env[ENV_GOOGLE_CLIENT_ID]);
+  const envSecret = sanitizeOAuthCredentialInput(process.env[ENV_GOOGLE_CLIENT_SECRET]);
   const envPort = parseRedirectPortFromEnv();
-
-  const clientId = envId || fromFile.clientId;
-  const clientSecret = envSecret || fromFile.clientSecret;
 
   const filePort =
     typeof fromFile.redirectPort === 'number'
@@ -68,7 +140,23 @@ export async function loadConfig() {
       : DEFAULT_OAUTH_REDIRECT_PORT;
   const redirectPort = envPort ?? filePort;
 
-  if (!clientId || !clientSecret) return null;
+  let clientId;
+  let clientSecret;
+
+  /**
+   * Prefer ~/.copyhub/config.json when it holds a full OAuth pair (wizard / copyhub config).
+   * Otherwise many machines still have COPYHUB_GOOGLE_* in shell or ~/.copyhub/.env from a template —
+   * those used to override fresh wizard credentials and caused invalid_client on the callback.
+   */
+  if (fromFile.clientId && fromFile.clientSecret) {
+    clientId = fromFile.clientId;
+    clientSecret = fromFile.clientSecret;
+  } else if (envId && envSecret) {
+    clientId = envId;
+    clientSecret = envSecret;
+  } else {
+    return null;
+  }
 
   return { clientId, clientSecret, redirectPort };
 }
@@ -150,6 +238,15 @@ export async function mergeConfigPartial(partial) {
   const out = { ...existing, ...partial };
   delete out.sheetTab;
   delete out.sheetDailyPrefix;
+  if (typeof out.clientId === 'string') {
+    out.clientId = sanitizeOAuthCredentialInput(out.clientId);
+  }
+  if (typeof out.clientSecret === 'string') {
+    out.clientSecret = sanitizeOAuthCredentialInput(out.clientSecret);
+  }
+  if (typeof out.googleSheetId === 'string') {
+    out.googleSheetId = sanitizeOAuthCredentialInput(out.googleSheetId);
+  }
   await writeFile(CONFIG_PATH, JSON.stringify(out, null, 2), 'utf8');
 }
 
@@ -169,11 +266,16 @@ export async function saveConfig(cfg) {
   }
   const out = {
     ...existing,
-    clientId: cfg.clientId,
-    clientSecret: cfg.clientSecret,
+    clientId: sanitizeOAuthCredentialInput(cfg.clientId),
+    clientSecret: sanitizeOAuthCredentialInput(cfg.clientSecret),
     redirectPort: cfg.redirectPort ?? DEFAULT_OAUTH_REDIRECT_PORT,
   };
-  if (cfg.googleSheetId !== undefined) out.googleSheetId = cfg.googleSheetId;
+  if (cfg.googleSheetId !== undefined) {
+    out.googleSheetId =
+      typeof cfg.googleSheetId === 'string'
+        ? sanitizeOAuthCredentialInput(cfg.googleSheetId)
+        : cfg.googleSheetId;
+  }
   delete out.sheetTab;
   delete out.sheetDailyPrefix;
   await writeFile(CONFIG_PATH, JSON.stringify(out, null, 2), 'utf8');

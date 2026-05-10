@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import 'dotenv/config';
+import { loadCopyhubEnv } from './load-env.js';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { program } from 'commander';
@@ -9,7 +9,7 @@ import {
   saveConfig,
   loadSheetSyncTarget,
   DEFAULT_OAUTH_REDIRECT_PORT,
-  describeOAuthCredentialSource,
+  describeEffectiveOAuthCredentialSource,
   ENV_GOOGLE_CLIENT_ID,
   ENV_GOOGLE_CLIENT_SECRET,
   ENV_OAUTH_REDIRECT_PORT,
@@ -31,8 +31,96 @@ import {
 import { killDaemonTree } from './stop-process.js';
 import { ensureDir } from './storage.js';
 import { runCopyhubDaemon } from './start-daemon-logic.js';
+import { wipeCopyhubDirectory } from './wipe-data.js';
+
+loadCopyhubEnv();
 
 const CLI_JS = fileURLToPath(new URL('./cli.js', import.meta.url));
+
+/**
+ * Stop background daemon if present. Same behavior as `copyhub stop`.
+ * @returns {'stopped' | 'cleared-stale' | 'none'}
+ */
+function stopBackgroundDaemonSync() {
+  pruneStaleRunState();
+  const s = readRunState();
+  if (!s) return 'none';
+  if (!isPidAlive(s.pid)) {
+    console.log(`PID ${s.pid} is not running — cleared run.json.`);
+    clearRunState();
+    return 'cleared-stale';
+  }
+  killDaemonTree(s.pid);
+  clearRunState();
+  console.log(`Stopped process PID ${s.pid}.`);
+  return 'stopped';
+}
+
+/**
+ * Shared by `start` and `restart`.
+ * @param {{ sheet?: boolean, overlay?: boolean, foreground?: boolean }} opts
+ */
+async function runCopyhubStart(opts) {
+  pruneStaleRunState();
+
+  const useSheet = opts.sheet !== false;
+  const skipOverlay =
+    opts.overlay === false || process.env.COPYHUB_START_NO_OVERLAY === '1';
+
+  const existing = readRunState();
+  if (existing && isPidAlive(existing.pid)) {
+    console.error(
+      `CopyHub already running in background (PID ${existing.pid}). See: copyhub list — Stop: copyhub stop`,
+    );
+    process.exit(1);
+  }
+  if (existing && !isPidAlive(existing.pid)) {
+    clearRunState();
+  }
+
+  if (opts.foreground) {
+    console.log('CopyHub foreground mode. Press Ctrl+C to stop.');
+    await ensureDir();
+
+    const ctrl = await runCopyhubDaemon({ useSheet, skipOverlay });
+
+    const onStop = () => {
+      ctrl.stopSync();
+      process.exit(0);
+    };
+    process.on('SIGINT', onStop);
+    process.on('SIGTERM', onStop);
+    return;
+  }
+
+  await ensureDir();
+  const daemonArgs = [CLI_JS, '_daemon'];
+  if (!useSheet) daemonArgs.push('--no-sheet');
+  if (skipOverlay) daemonArgs.push('--no-overlay');
+
+  const child = spawn(process.execPath, daemonArgs, {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: process.platform === 'win32',
+    env: { ...process.env },
+  });
+  child.unref();
+
+  if (!child.pid) {
+    console.error('Could not spawn background process.');
+    process.exit(1);
+  }
+
+  writeRunState({
+    pid: child.pid,
+    startedAt: new Date().toISOString(),
+    foreground: false,
+  });
+
+  console.log(`CopyHub running in background (PID ${child.pid}). You may close this terminal.`);
+  console.log('Check: copyhub list   |   Stop: copyhub stop');
+  process.exit(0);
+}
 
 program.name('copyhub').description(
   'CopyHub — clipboard, overlay history, Google Sheets sync (COPYHUB-daily tabs). Windows, macOS, Linux.',
@@ -72,7 +160,7 @@ program
 program
   .command('login')
   .description(
-    `Google sign-in (OAuth Sheets), then Spreadsheet ID setup page — port ${DEFAULT_OAUTH_REDIRECT_PORT} or ${ENV_OAUTH_REDIRECT_PORT}`,
+    `OAuth Sheets flow (opens browser). If Client ID/Secret are missing, a localhost wizard saves them first — callback port ${DEFAULT_OAUTH_REDIRECT_PORT} or ${ENV_OAUTH_REDIRECT_PORT}`,
   )
   .action(async () => {
     await runLoginFlow();
@@ -87,16 +175,49 @@ program
   });
 
 program
+  .command('reset')
+  .description(
+    'Stop background daemon if running; delete ~/.copyhub entirely (config, tokens, history, run state). Requires --yes',
+  )
+  .option('--yes', 'Required confirmation flag (destructive)')
+  .action(async (opts) => {
+    if (!opts.yes) {
+      console.error(
+        'Refusing to wipe without --yes. Deletes ~/.copyhub (Windows: %USERPROFILE%\\.copyhub). Example: copyhub reset --yes',
+      );
+      process.exit(1);
+    }
+    pruneStaleRunState();
+    const s = readRunState();
+    if (s?.pid && isPidAlive(s.pid)) {
+      killDaemonTree(s.pid);
+    }
+    try {
+      await wipeCopyhubDirectory();
+    } catch (e) {
+      console.error((/** @type {Error} */ (e)).message || String(e));
+      process.exit(1);
+    }
+    console.log(`Removed CopyHub data directory: ${DIR}`);
+    console.log('.env is not changed — remove OAuth vars there if you want.');
+    console.log('If an overlay window was open separately, close it manually.');
+  });
+
+program
   .command('overlay')
   .description(
     'Run only the Electron overlay window (without copyhub start). macOS may require Accessibility permissions.',
   )
   .action(() => {
     try {
-      const child = spawnCopyhubOverlay();
+      // Detach + hide console on Windows so closing the terminal does not kill the overlay.
+      const child = spawnCopyhubOverlay({ stdio: 'ignore', detached: true });
       child.on('error', (err) => {
         console.error(err.message);
         process.exit(1);
+      });
+      child.once('spawn', () => {
+        child.unref();
       });
     } catch (e) {
       console.error(/** @type {Error} */ (e).message);
@@ -130,20 +251,30 @@ program
   .command('stop')
   .description('Stop the background process started by copyhub start (and overlay child)')
   .action(() => {
-    pruneStaleRunState();
-    const s = readRunState();
-    if (!s) {
+    const r = stopBackgroundDaemonSync();
+    if (r === 'none') {
       console.log('No background process to stop.');
-      return;
     }
-    if (!isPidAlive(s.pid)) {
-      console.log(`PID ${s.pid} is not running — cleared run.json.`);
-      clearRunState();
-      return;
+  });
+
+program
+  .command('restart')
+  .description(
+    'Stop the background daemon if running, then start again (reloads ~/.copyhub/config.json, .env, shortcut). Same flags as start.',
+  )
+  .option('--no-sheet', 'Local history only, do not write to Sheets')
+  .option('--no-overlay', 'Do not launch Electron')
+  .option('--foreground', 'Run in foreground after restart (Ctrl+C stops)')
+  .action(async (opts) => {
+    const r = stopBackgroundDaemonSync();
+    if (r === 'stopped') {
+      console.log('Starting again — config, ~/.copyhub/.env, and shell env will be re-read.');
+    } else if (r === 'none') {
+      console.log('No background daemon — starting CopyHub.');
+    } else {
+      console.log('Stale run state cleared — starting CopyHub.');
     }
-    killDaemonTree(s.pid);
-    clearRunState();
-    console.log(`Stopped process PID ${s.pid}.`);
+    await runCopyhubStart(opts);
   });
 
 program
@@ -154,22 +285,14 @@ program
     const cfg = await loadConfig();
     const sheet = await loadSheetSyncTarget();
     const tok = await loadTokens();
-    const src = describeOAuthCredentialSource();
-
     if (!cfg) {
       console.log('OAuth config: missing');
       console.log(
-        `  Set ${ENV_GOOGLE_CLIENT_ID} and ${ENV_GOOGLE_CLIENT_SECRET} in .env (see .env.example), or run: copyhub config`,
+        `  Set ${ENV_GOOGLE_CLIENT_ID} and ${ENV_GOOGLE_CLIENT_SECRET} in .env (see .env.example), run copyhub config, or copyhub login (browser wizard)`,
       );
     } else {
-      const srcLabel =
-        src === 'env'
-          ? 'environment / .env'
-          : src === 'mixed'
-            ? 'mixed .env + config file'
-            : CONFIG_PATH;
       console.log('OAuth config: ok');
-      console.log(`  Client ID/Secret source: ${srcLabel}`);
+      console.log(`  Client ID/Secret source: ${describeEffectiveOAuthCredentialSource()}`);
       console.log(`  Callback: http://127.0.0.1:${cfg.redirectPort}/oauth2callback`);
     }
 
@@ -228,64 +351,7 @@ program
   .option('--no-overlay', 'Do not launch Electron')
   .option('--foreground', 'Run in foreground (Ctrl+C stops; no background PID file)')
   .action(async (opts) => {
-    pruneStaleRunState();
-
-    const useSheet = opts.sheet !== false;
-    const skipOverlay =
-      opts.overlay === false || process.env.COPYHUB_START_NO_OVERLAY === '1';
-
-    const existing = readRunState();
-    if (existing && isPidAlive(existing.pid)) {
-      console.error(
-        `CopyHub already running in background (PID ${existing.pid}). See: copyhub list — Stop: copyhub stop`,
-      );
-      process.exit(1);
-    }
-    if (existing && !isPidAlive(existing.pid)) {
-      clearRunState();
-    }
-
-    if (opts.foreground) {
-      console.log('CopyHub foreground mode. Press Ctrl+C to stop.');
-      await ensureDir();
-
-      const ctrl = await runCopyhubDaemon({ useSheet, skipOverlay });
-
-      const onStop = () => {
-        ctrl.stopSync();
-        process.exit(0);
-      };
-      process.on('SIGINT', onStop);
-      process.on('SIGTERM', onStop);
-      return;
-    }
-
-    await ensureDir();
-    const daemonArgs = [CLI_JS, '_daemon'];
-    if (!useSheet) daemonArgs.push('--no-sheet');
-    if (skipOverlay) daemonArgs.push('--no-overlay');
-
-    const child = spawn(process.execPath, daemonArgs, {
-      detached: true,
-      stdio: 'ignore',
-      env: { ...process.env },
-    });
-    child.unref();
-
-    if (!child.pid) {
-      console.error('Could not spawn background process.');
-      process.exit(1);
-    }
-
-    writeRunState({
-      pid: child.pid,
-      startedAt: new Date().toISOString(),
-      foreground: false,
-    });
-
-    console.log(`CopyHub running in background (PID ${child.pid}). You may close this terminal.`);
-    console.log('Check: copyhub list   |   Stop: copyhub stop');
-    process.exit(0);
+    await runCopyhubStart(opts);
   });
 
 program
@@ -328,7 +394,9 @@ program
   .action(() => {
     console.log(`copyhub config [--client-id ID] [--client-secret SEC] [--redirect-port P] [--sheet-id ID]
 copyhub login     | copyhub logout | copyhub status
+copyhub reset --yes   (delete ~/.copyhub — stop daemon first is recommended)
 copyhub start [--no-sheet] [--no-overlay] [--foreground]
+copyhub restart [--no-sheet] [--no-overlay] [--foreground]   (stop daemon if running, then start — reloads config/.env)
       Default runs in background (terminal can close). Single instance — second start is blocked.
 copyhub list (ls) | copyhub stop
 copyhub overlay   | copyhub commands / copyhub --help`);

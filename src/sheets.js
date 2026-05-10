@@ -7,7 +7,7 @@ import { formatGoogleSheetUserMessage } from './sheet-api-errors.js';
 /**
  * @param {string} tabName
  */
-function a1RangeForTab(tabName) {
+export function a1RangeForTab(tabName) {
   const escaped = /[^A-Za-z0-9_]/.test(tabName)
     ? `'${tabName.replace(/'/g, "''")}'`
     : tabName;

@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -11,9 +10,18 @@ import {
   Tray,
   Menu,
   nativeImage,
+  systemPreferences,
 } from 'electron';
+import { loadCopyhubEnv } from '../src/load-env.js';
 import { readRecentHistorySync } from '../src/storage.js';
-import { loadOverlayAcceleratorFromConfigSync } from '../src/config.js';
+import {
+  loadOverlayAcceleratorFromConfigSync,
+  loadSheetSyncTarget,
+} from '../src/config.js';
+import { loadTokens } from '../src/tokens.js';
+import { fetchOverlayDailyTabRows } from '../src/sheet-overlay-history.js';
+
+loadCopyhubEnv();
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -25,21 +33,42 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Set to 1 so the window does not hide on blur (only Esc / pick row to copy). */
 const STICKY_NO_BLUR = process.env.COPYHUB_OVERLAY_STICKY === '1';
 
-/** Electron Accelerator: use `Control`, not `Ctrl`; `CommandOrControl` = Ctrl (Win) / Cmd (Mac). */
+/**
+ * Electron Accelerator: use `Control`, not `Ctrl`; Unicode ⌃/⌘ → words.
+ * See migrateDarwinOverlayAccelerator — `CommandOrControl` is ⌘ on macOS, not ⌃.
+ */
 function normalizeAccelerator(raw) {
   if (!raw || typeof raw !== 'string') return '';
-  let s = raw.trim();
+  let s = raw.trim().normalize('NFKC');
+  s = s.replace(/\u2303/g, 'Control'); // ⌃
+  s = s.replace(/\u2318/g, 'Command'); // ⌘
+  s = s.replace(/\u2325/g, 'Alt'); // ⌥
   s = s.replace(/\bCtrl\b/gi, 'Control');
   s = s.replace(/\bCmd\b/gi, 'Command');
+  s = s.replace(/\bCmdOrCtrl\b/gi, 'CommandOrControl');
   s = s.replace(/\s*\+\s*/g, '+');
   return s;
 }
 
-const DEFAULT_ACCEL = 'CommandOrControl+Shift+H';
+/**
+ * On macOS, Electron maps `CommandOrControl` to ⌘. CopyHub defaults want ⌃ Control + Shift + H.
+ * Migrate only this chord so ⌃+Shift+H works if config still has the cross-platform preset.
+ * @param {string} normalized output of normalizeAccelerator
+ */
+function migrateDarwinOverlayAccelerator(normalized) {
+  if (process.platform !== 'darwin' || !normalized) return normalized;
+  const compact = normalized.replace(/\s+/g, '');
+  if (/^commandorcontrol\+shift\+h$/i.test(compact)) return 'Control+Shift+H';
+  return normalized;
+}
+
+/** Same physical ⌃ / Ctrl key on Mac (Apple & Windows-layout keyboards) and on Win/Linux — one default everywhere. */
+const DEFAULT_ACCEL = 'Control+Shift+H';
 const HIDE_ON_START = process.env.COPYHUB_OVERLAY_HIDE_ON_START === '1';
 
-/** Overlay width (~70% of 460px baseline). */
-const OVERLAY_WIDTH = Math.round(460 * 0.7);
+/** Overlay size (slightly larger than earlier ~70% width). */
+const OVERLAY_WIDTH = Math.round(460 * 0.84);
+const OVERLAY_HEIGHT = 590;
 
 /** For UI / IPC: registered shortcut and raw value from .env */
 let overlayHotkeyMeta = {
@@ -52,6 +81,27 @@ let win = null;
 let tray = null;
 /** Avoid hiding immediately after show (WM quirks). */
 let blurHideEnabled = false;
+
+/**
+ * After showing the overlay, enable blur→hide after a short grace period so clicks outside close it reliably.
+ * @param {BrowserWindow} w
+ */
+function armBlurHideEnable(w) {
+  if (STICKY_NO_BLUR || !w || w.isDestroyed()) return;
+  blurHideEnabled = false;
+  let armed = false;
+  const arm = () => {
+    if (armed || !w || w.isDestroyed()) return;
+    armed = true;
+    setTimeout(() => {
+      if (!STICKY_NO_BLUR && w && !w.isDestroyed()) {
+        blurHideEnabled = true;
+      }
+    }, 320);
+  };
+  w.once('focus', arm);
+  setTimeout(arm, 420);
+}
 
 /**
  * Stay above other apps: screen-saver level (highest in Electron), moveTop, all workspaces.
@@ -85,7 +135,7 @@ function applyAlwaysOnTopStack(w) {
 function createWindow() {
   win = new BrowserWindow({
     width: OVERLAY_WIDTH,
-    height: 540,
+    height: OVERLAY_HEIGHT,
     alwaysOnTop: true,
     show: false,
     /** Frameless: no title bar + menu (Windows/macOS). */
@@ -138,10 +188,8 @@ function createWindow() {
     applyAlwaysOnTopStack(win);
     win.focus();
     win.webContents.send('overlay:open');
-    setTimeout(() => {
-      applyAlwaysOnTopStack(win);
-      blurHideEnabled = true;
-    }, 800);
+    setTimeout(() => applyAlwaysOnTopStack(win), 120);
+    armBlurHideEnable(win);
   });
 }
 
@@ -180,15 +228,13 @@ function toggleOverlay() {
     applyAlwaysOnTopStack(win);
     win.focus();
     win.webContents.send('overlay:open');
-    setTimeout(() => {
-      applyAlwaysOnTopStack(win);
-      blurHideEnabled = true;
-    }, 800);
+    setTimeout(() => applyAlwaysOnTopStack(win), 120);
+    armBlurHideEnable(win);
   }
 }
 
 /**
- * Register global shortcut: try .env (normalized) then default CommandOrControl+Shift+H.
+ * Register global shortcut: try .env / saved config (normalized) then default Control+Shift+H.
  * @returns {{ accelerator: string, usedFallback: boolean }}
  */
 function registerHotkeys() {
@@ -197,7 +243,7 @@ function registerHotkeys() {
     loadOverlayAcceleratorFromConfigSync();
   const candidates = [];
   if (raw) {
-    const n = normalizeAccelerator(raw);
+    const n = migrateDarwinOverlayAccelerator(normalizeAccelerator(raw));
     if (n) candidates.push(n);
   }
   candidates.push(DEFAULT_ACCEL);
@@ -206,10 +252,14 @@ function registerHotkeys() {
   for (let i = 0; i < candidates.length; i++) {
     const acc = candidates[i];
     try {
-      if (globalShortcut.register(acc, () => toggleOverlay())) {
+      const ok = globalShortcut.register(acc, () => toggleOverlay());
+      if (ok) {
         if (i > 0) usedFallback = true;
         return { accelerator: acc, usedFallback };
       }
+      console.warn(
+        `CopyHub overlay — globalShortcut could not register "${acc}" (in use by another app, or macOS Input Source / permissions).`,
+      );
     } catch (e) {
       console.warn('Invalid accelerator:', acc, /** @type {Error} */ (e).message);
     }
@@ -219,7 +269,187 @@ function registerHotkeys() {
       /* ignore */
     }
   }
+  if (process.platform === 'darwin') {
+    const trusted = systemPreferences.isTrustedAccessibilityClient(false);
+    if (!trusted) {
+      console.error(
+        'CopyHub overlay — macOS: enable Accessibility for the app that launches Electron (e.g. Terminal, iTerm, or Node) in System Settings → Privacy & Security → Accessibility.',
+      );
+      try {
+        systemPreferences.isTrustedAccessibilityClient(true);
+      } catch {
+        /* ignore */
+      }
+    } else {
+      console.error(
+        'CopyHub overlay — shortcut still failed: try Input Source US/QWERTY (Electron globalShortcut quirk on macOS), pick another chord in config, or open from the menu bar icon.',
+      );
+    }
+  }
   return { accelerator: '', usedFallback: false };
+}
+
+function mergeHistoryForOverlay(localItems, sheetItems, cap) {
+  const seen = new Set();
+  /** @type {typeof localItems} */
+  const out = [];
+  /** Sheet rows first so duplicates dedupe keeps sheet metadata when timestamps tie. */
+  const combined = [...sheetItems, ...localItems];
+  combined.sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0));
+  for (const it of combined) {
+    const key = `${it.ts}\u0000${it.text}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(it);
+  }
+  return out.slice(0, cap);
+}
+
+/** @type {{ merged: Array<{ ts: string, text: string, synced: boolean }> }} */
+const historyMergedCache = {
+  merged: [],
+};
+
+/** Recent local lines only — Sheet supplies older / cross-device rows so they are not crowded out. */
+const HISTORY_LOCAL_LINES = 700;
+/** Max merged entries after dedupe (pagination slices this list). */
+const HISTORY_MERGE_CAP = 4000;
+
+/** @type {{ sheetFetched: number, sheetHint: string }} */
+let lastHistorySheetMeta = { sheetFetched: 0, sheetHint: '' };
+
+/** Sequential Sheet fetch: one daily tab per step until overlay has enough merged rows. */
+let sheetIncrementalState = {
+  accumulatedItems: [],
+  nextDaysAgo: 0,
+  daysBackLimit: 30,
+  exhausted: false,
+  maxRowsPerTab: 500,
+};
+
+function resetSheetIncrementalState() {
+  sheetIncrementalState = {
+    accumulatedItems: [],
+    nextDaysAgo: 0,
+    daysBackLimit: 30,
+    exhausted: false,
+    maxRowsPerTab: 500,
+  };
+}
+
+async function fetchNextDailyTabIntoState() {
+  if (sheetIncrementalState.exhausted) return;
+  if (sheetIncrementalState.nextDaysAgo > sheetIncrementalState.daysBackLimit) {
+    sheetIncrementalState.exhausted = true;
+    return;
+  }
+  try {
+    const items = await fetchOverlayDailyTabRows(
+      sheetIncrementalState.nextDaysAgo,
+      sheetIncrementalState.maxRowsPerTab,
+    );
+    sheetIncrementalState.accumulatedItems.push(...items);
+    sheetIncrementalState.accumulatedItems.sort(
+      (a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0),
+    );
+    if (sheetIncrementalState.accumulatedItems.length > HISTORY_MERGE_CAP) {
+      sheetIncrementalState.accumulatedItems =
+        sheetIncrementalState.accumulatedItems.slice(0, HISTORY_MERGE_CAP);
+    }
+  } catch (e) {
+    const msg = /** @type {Error} */ (e).message || String(e);
+    lastHistorySheetMeta.sheetHint = `Google Sheet error: ${msg.slice(0, 140)}`;
+    console.warn('[CopyHub overlay]', lastHistorySheetMeta.sheetHint);
+    sheetIncrementalState.exhausted = true;
+    return;
+  }
+  sheetIncrementalState.nextDaysAgo += 1;
+}
+
+/**
+ * Ensure merged history covers at least `page * pageSize` items (capped), fetching extra Sheet tabs only if needed.
+ */
+async function ensureMergedHistoryCoversPage(page, pageSize) {
+  const localItems = buildLocalHistoryItems();
+  const sheetTarget = await loadSheetSyncTarget();
+  const tok = await loadTokens();
+  const sheetOk =
+    Boolean(sheetTarget) && Boolean(tok?.refresh_token || tok?.access_token);
+
+  if (!sheetOk) {
+    if (!sheetTarget) {
+      lastHistorySheetMeta = {
+        sheetFetched: 0,
+        sheetHint: 'Google Sheet: not configured — run copyhub login',
+      };
+    } else {
+      lastHistorySheetMeta = {
+        sheetFetched: 0,
+        sheetHint: 'Google Sheet: not signed in — run copyhub login',
+      };
+    }
+    sheetIncrementalState.exhausted = true;
+    historyMergedCache.merged = mergeHistoryForOverlay(localItems, [], HISTORY_MERGE_CAP);
+    return;
+  }
+
+  const targetMin = Math.min(page * pageSize, HISTORY_MERGE_CAP);
+
+  while (true) {
+    const merged = mergeHistoryForOverlay(
+      localItems,
+      sheetIncrementalState.accumulatedItems,
+      HISTORY_MERGE_CAP,
+    );
+    historyMergedCache.merged = merged;
+
+    if (merged.length >= HISTORY_MERGE_CAP) break;
+    if (sheetIncrementalState.exhausted) break;
+    /** Merge Sheet at least once when configured so dedupe / synced flags match Sheet. */
+    if (merged.length >= targetMin && sheetIncrementalState.nextDaysAgo > 0) break;
+
+    await fetchNextDailyTabIntoState();
+  }
+
+  const preservedErr =
+    typeof lastHistorySheetMeta.sheetHint === 'string' &&
+    lastHistorySheetMeta.sheetHint.startsWith('Google Sheet error:');
+
+  lastHistorySheetMeta.sheetFetched = sheetIncrementalState.accumulatedItems.length;
+
+  if (!preservedErr) {
+    if (!sheetIncrementalState.exhausted) {
+      lastHistorySheetMeta.sheetHint = `Google Sheet: ${sheetIncrementalState.accumulatedItems.length} rows · more when you page`;
+    } else if (sheetIncrementalState.accumulatedItems.length === 0) {
+      lastHistorySheetMeta.sheetHint =
+        'Google Sheet: 0 rows in last 31 days (check COPYHUB-YYYY-MM-DD tabs / timezone)';
+    } else {
+      lastHistorySheetMeta.sheetHint = `Google Sheet: ${sheetIncrementalState.accumulatedItems.length} rows loaded`;
+    }
+  }
+}
+
+function buildLocalHistoryItems() {
+  return readRecentHistorySync(HISTORY_LOCAL_LINES).map((row) => ({
+    ts: row.ts || '',
+    text: typeof row.text === 'string' ? row.text : '',
+    synced: Boolean(row.syncedToSheet || row.syncedToGmail),
+  }));
+}
+
+/** @param {ReturnType<typeof buildLocalHistoryItems>} items */
+function paginateHistoryItems(items, page, pageSize) {
+  const total = items.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(page, 1), totalPages);
+  const start = (safePage - 1) * pageSize;
+  return {
+    items: items.slice(start, start + pageSize),
+    page: safePage,
+    pageSize,
+    total,
+    totalPages,
+  };
 }
 
 function registerIpc() {
@@ -230,17 +460,81 @@ function registerIpc() {
     sticky: STICKY_NO_BLUR,
   }));
 
-  ipcMain.handle('history:get', () => {
+  /** Fast path: local history.jsonl only (overlay shows this while Sheet loads). */
+  ipcMain.handle('history:getLocal', (_e, opts = {}) => {
     try {
+      const pageSize = Math.min(Math.max(Number(opts.pageSize) || 10, 1), 50);
+      let page = Math.max(Number(opts.page) || 1, 1);
+      const localItems = buildLocalHistoryItems();
+      const paginated = paginateHistoryItems(localItems, page, pageSize);
       return {
-        items: readRecentHistorySync(200).map((row) => ({
-          ts: row.ts || '',
-          text: typeof row.text === 'string' ? row.text : '',
-          synced: Boolean(row.syncedToSheet || row.syncedToGmail),
-        })),
+        ...paginated,
+        provisional: true,
+        sheetHint:
+          localItems.length > 0
+            ? 'Showing local copies · loading Google Sheet…'
+            : 'Loading Google Sheet…',
+        sheetFetched: 0,
+        sheetHasMore: false,
       };
     } catch (e) {
-      return { error: /** @type {Error} */ (e).message, items: [] };
+      return {
+        error: /** @type {Error} */ (e).message,
+        items: [],
+        page: 1,
+        pageSize: 10,
+        total: 0,
+        totalPages: 1,
+        provisional: true,
+        sheetHint: '',
+        sheetFetched: 0,
+        sheetHasMore: false,
+      };
+    }
+  });
+
+  ipcMain.handle('history:get', async (_e, opts = {}) => {
+    try {
+      const pageSize = Math.min(Math.max(Number(opts.pageSize) || 10, 1), 50);
+      let page = Math.max(Number(opts.page) || 1, 1);
+      const refresh = Boolean(opts.refresh);
+
+      if (refresh) {
+        resetSheetIncrementalState();
+        lastHistorySheetMeta = { sheetFetched: 0, sheetHint: '' };
+        historyMergedCache.merged = [];
+      }
+
+      await ensureMergedHistoryCoversPage(page, pageSize);
+
+      const total = historyMergedCache.merged.length;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      page = Math.min(page, totalPages);
+      const start = (page - 1) * pageSize;
+      const items = historyMergedCache.merged.slice(start, start + pageSize);
+
+      return {
+        items,
+        page,
+        pageSize,
+        total,
+        totalPages,
+        sheetHint: lastHistorySheetMeta.sheetHint,
+        sheetFetched: lastHistorySheetMeta.sheetFetched,
+        sheetHasMore: !sheetIncrementalState.exhausted,
+      };
+    } catch (e) {
+      return {
+        error: /** @type {Error} */ (e).message,
+        items: [],
+        page: 1,
+        pageSize: 10,
+        total: 0,
+        totalPages: 1,
+        sheetHint: '',
+        sheetFetched: 0,
+        sheetHasMore: false,
+      };
     }
   });
 
@@ -294,12 +588,12 @@ if (gotLock) {
     };
     if (accelerator) {
       console.log('CopyHub overlay — shortcut in use:', accelerator);
-      console.log('Windows tip: Ctrl+Shift+H (CommandOrControl+Shift+H).');
+      console.log('Default shortcut: Control+Shift+H (⌃ or Ctrl + Shift + H).');
       if (usedFallback) {
         console.warn(
-          'COPYHUB_OVERLAY_ACCELERATOR could not be registered. Using default CommandOrControl+Shift+H.',
+          'COPYHUB_OVERLAY_ACCELERATOR could not be registered. Using default Control+Shift+H.',
         );
-        console.warn('Leave COPYHUB_OVERLAY_ACCELERATOR unset in .env to always use Ctrl+Shift+H.');
+        console.warn('Leave COPYHUB_OVERLAY_ACCELERATOR unset to use the default Control+Shift+H.');
       }
     } else {
       console.error(

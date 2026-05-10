@@ -57,3 +57,14 @@ export function readRecentHistorySync(maxLines = 200) {
   }
   return out.reverse();
 }
+
+/**
+ * True when `text` equals the latest saved history row (skip consecutive identical copies).
+ * @param {string} text
+ */
+export function isDuplicateOfLatestHistory(text) {
+  if (typeof text !== 'string' || text.length === 0) return false;
+  const recent = readRecentHistorySync(1);
+  const last = recent[0];
+  return typeof last?.text === 'string' && last.text === text;
+}
