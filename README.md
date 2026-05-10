@@ -1,46 +1,81 @@
+<div align="center">
+
 # CopyHub
 
-CopyHub watches your **clipboard**, stores **local history** (`~/.copyhub/history.jsonl`), optionally syncs to **Google Sheets** (one tab per day), and opens an **Electron overlay** to browse and pick recent copies.
+**Clipboard history · optional Google Sheets sync · floating overlay**
 
-Runs on **Windows**, **macOS**, and **Linux**.
+[![npm](https://img.shields.io/npm/v/copyhub-cli?label=npm&logo=npm)](https://www.npmjs.com/package/copyhub-cli)
+[![Node.js](https://img.shields.io/badge/node-%E2%89%A518-green?logo=node.js)](https://nodejs.org/)
+[![License](https://img.shields.io/badge/license-MIT-blue)](./package.json)
+
+*Watch the clipboard, save **`~/.copyhub/history.jsonl`**, sync daily tabs to Sheets, pick copies from an Electron overlay.*
+
+**Windows · macOS · Linux**
+
+</div>
 
 ---
 
-## Table of contents
+## Contents
 
-Sections below: **Features** · **Requirements** · **Installation** · **Environment files** · **Google Cloud & OAuth** · **OAuth config vs env** · **First run** · **CLI commands** · **Environment variables** · **Data directory** · **Google Sheets** · **Overlay** · **Clipboard & history** · **Updating** · **Troubleshooting** · **Security** · **License**.
+| | |
+|--|--|
+| [Overview](#overview) | [Installation](#installation) |
+| [Quick start](#quick-start) | [Environment files](#environment-files) |
+| [Google Cloud & OAuth](#google-cloud--oauth) | [Google Cloud setup (step-by-step)](#google-cloud-setup-step-by-step) |
+| [OAuth: config vs env](#oauth-config-vs-env-important) | [CLI commands](#cli-commands) |
+| [Environment variables](#environment-variables) | [Data directory](#data-directory) |
+| [Google Sheets](#google-sheets) | [Overlay (Electron)](#overlay-electron) |
+| [Clipboard & history](#clipboard--history) | [Updating (latest version)](#updating-latest-version) |
+| [Troubleshooting](#troubleshooting) | [Security](#security) |
+| [Tips (PayPal)](#tips-paypal) | [License](#license) |
+
+---
+
+## Overview
+
+| Capability | Details |
+|------------|---------|
+| **Local history** | JSON Lines under `~/.copyhub/history.jsonl` |
+| **Sheets** | Optional sync; one tab per day: `COPYHUB-YYYY-MM-DD` |
+| **Overlay** | Electron window: browse history, paginated, incremental Sheet load |
 
 ---
 
 ## Features
 
-- Clipboard polling (tunable via `COPYHUB_POLL_MS`).
-- Skips saving the **same content twice in a row** to `history.jsonl` / Sheets.
-- Writes Sheets to tabs named **`COPYHUB-YYYY-MM-DD`** (machine timezone).
-- Overlay: paginated history, incremental Sheet sync (not all tabs at once), hints while Sheet data loads.
+- Clipboard polling — interval via `COPYHUB_POLL_MS`.
+- Skips writing the **same content twice in a row** to disk / Sheets.
+- Overlay shows hints while Sheet data loads; does not fetch every tab at once.
 
 ---
 
 ## Requirements
 
 - **Node.js** ≥ 18  
-- A **Google Cloud project** with:
-  - **Google Sheets API** enabled **on the same project** as the OAuth client  
-  - OAuth client type **Web application** and redirect URI configured correctly (see below)
+- **Google Cloud project** (same project for everything below):
+  - [Google Sheets API](https://console.cloud.google.com/apis/library/sheets.googleapis.com) **enabled**
+  - OAuth client type **Web application** + correct **redirect URI** (see [Google Cloud & OAuth](#google-cloud--oauth))
 
 ---
 
 ## Installation
 
-### Global install (npm)
+<details>
+<summary><strong>Global install (npm)</strong></summary>
 
 ```bash
 npm install -g copyhub-cli
 ```
 
-Ensure `node` and `copyhub` are on your `PATH`. On Linux/macOS you may need an npm global prefix for your user — see [npm global installation](https://docs.npmjs.com/cli/v10/commands/npm-install#global-installation).
+Ensure `node` and `copyhub` are on your `PATH`. On Linux/macOS you may need a user-level npm global prefix — see [npm — global installation](https://docs.npmjs.com/cli/v10/commands/npm-install#global-installation).
 
-### From source (this repo)
+Đã cài từ npm và muốn **lên bản mới nhất**: [Updating (latest version)](#updating-latest-version).
+
+</details>
+
+<details>
+<summary><strong>From source (this repo)</strong></summary>
 
 ```bash
 npm install
@@ -53,96 +88,158 @@ Without linking:
 node src/cli.js <command>
 ```
 
----
-
-## Environment files
-
-The CLI and Electron overlay call `loadCopyhubEnv()`: each `.env` file is parsed and merged into **one object** — **later files override keys** from earlier ones. Then each key is applied to `process.env` **only if that variable is not already set** in the process environment (values you `export` in the shell before starting Node always win).
-
-File order:
-
-1. `<package>/.env` (installed package directory / repo when developing)  
-2. `~/.copyhub/.env`  
-3. `./.env` in the **current working directory** (`cwd`)
-
-So after `npm install -g`, variables in `~/.copyhub/.env` still load regardless of `cwd`.
-
-See the template: `.env.example`.
+</details>
 
 ---
 
-## Google Cloud & OAuth
-
-1. Enable **[Google Sheets API](https://console.cloud.google.com/apis/library/sheets.googleapis.com)** for your project.  
-2. **Credentials** → **Create credentials** → **OAuth client ID** → **Web application**.  
-3. **Authorized redirect URIs** — add **exactly** (CopyHub uses `127.0.0.1`, not `localhost`, for the default redirect):
-
-   ```text
-   http://127.0.0.1:19999/oauth2callback
-   ```
-
-   If you change the port (`COPYHUB_OAUTH_REDIRECT_PORT` or `redirectPort` in config), the Console URI must use that port.
-
-4. **Do not** mix Client ID from env with Secret from file (CopyHub refuses mixed half-pairs). Credential precedence — see the next section.
-
-### How to supply Client ID / Secret
-
-| Method | Notes |
-|--------|--------|
-| **`copyhub login`** | Recommended first time: localhost wizard for ID/Secret → saves `config.json` → Google sign-in → spreadsheet ID / shortcut setup. |
-| **`copyhub config --client-id … --client-secret …`** | Writes `config.json` directly. |
-| **`.env`** or shell | Use only when **`config.json` does not** contain a full ID+Secret pair, or you intentionally rely on env only (no OAuth in config). |
-
-On the wizard (Mac/Safari): prefer **Download JSON** from the Console and paste `client_id` / `client_secret`; clear the fields before pasting to avoid Keychain filling an old secret.
-
----
-
-## OAuth: config vs env (important)
-
-- If **`~/.copyhub/config.json` contains both** `clientId` **and** `clientSecret` → CopyHub **always uses the file pair** for OAuth; **`COPYHUB_GOOGLE_*` from env/.env are ignored** for those two fields.  
-- If the file **does not** have both → use **`COPYHUB_GOOGLE_CLIENT_ID`** + **`COPYHUB_GOOGLE_CLIENT_SECRET`** from env (merged from `.env`).  
-- Never combine ID from env with Secret from file (or the reverse).
-
-ID/Secret values are **sanitized** on read/write (BOM, CRLF, NBSP, zero-width characters, stray brackets around strings).
-
-Check which source is active:
+## Quick start
 
 ```bash
-copyhub status
+copyhub login      # OAuth + browser setup (Client ID / Secret, Sheet ID, shortcut)
+copyhub start      # clipboard + Sheets + overlay (background; close terminal OK)
 ```
 
----
-
-## First run
-
-```bash
-copyhub login
-```
-
-1. If OAuth is not fully configured in config/env → the browser opens **`http://127.0.0.1:<port>/credentials`** to enter Client ID / Secret.  
-2. Then Google sign-in; callback **`/oauth2callback`**.  
-3. Setup page: **Spreadsheet ID** (from URL `…/d/<ID>/edit`), **platform**, **overlay shortcut** (optional).
-
-Start the daemon (clipboard + Sheet + overlay by default):
-
-```bash
-copyhub start
-```
-
-You can close the terminal; the process runs in the background. Use `copyhub list`, stop with `copyhub stop`.
-
-After editing `config.json`, `~/.copyhub/.env`, or shell variables that affect the daemon/overlay, **reload** without manual stop/start:
+Reload config / `.env` without manual stop:
 
 ```bash
 copyhub restart
 ```
 
-(Same flags as `start`: `--no-sheet`, `--no-overlay`, `--foreground`.)
-
 Foreground (Ctrl+C stops everything):
 
 ```bash
 copyhub start --foreground
+```
+
+`copyhub stop` stops the daemon and overlay child.
+
+**Đã cài CopyHub rồi?** Cập nhật lên bản mới nhất — xem [Updating (latest version)](#updating-latest-version).
+
+---
+
+## Environment files
+
+`loadCopyhubEnv()` merges several `.env` files into **one object** — **later files override earlier keys**. Each key is applied to `process.env` **only if not already set** in the real environment (shell `export` wins).
+
+**Merge order**
+
+1. `<package>/.env` (npm package dir or repo root when developing)  
+2. `~/.copyhub/.env`  
+3. `./.env` from the **current working directory**
+
+After `npm install -g`, `~/.copyhub/.env` still applies no matter where you run commands.
+
+Template: [`.env.example`](./.env.example).
+
+---
+
+## Google Cloud & OAuth
+
+CopyHub needs **Google Sheets API** enabled and an **OAuth 2.0 Client ID** (**Web application**) on the **same** Cloud project.
+
+### Console quick links
+
+| Goal | Open |
+|------|------|
+| Enable **Google Sheets API** | [API Library — Sheets API](https://console.cloud.google.com/apis/library/sheets.googleapis.com) |
+| Create **Client ID** & **Client Secret** | [APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials) |
+
+### Minimal checklist
+
+1. Enable **[Google Sheets API](https://console.cloud.google.com/apis/library/sheets.googleapis.com)** → pick project → **Enable**.  
+2. **[Credentials](https://console.cloud.google.com/apis/credentials)** → **Create credentials** → **OAuth client ID** → **Web application** ([full walkthrough](#google-cloud-setup-step-by-step)).  
+3. **Authorized redirect URIs** — add **exactly** (CopyHub uses `127.0.0.1`, not `localhost`):
+
+   ```
+   http://127.0.0.1:19999/oauth2callback
+   ```
+
+   If you change port (`COPYHUB_OAUTH_REDIRECT_PORT` or `redirectPort` in config), update this URI in Google Console to match.
+
+> **Important:** Do not mix Client ID from env with Secret from `config.json` (or the reverse). CopyHub rejects mixed pairs — see [OAuth: config vs env](#oauth-config-vs-env-important).
+
+### How to supply Client ID / Secret
+
+| Method | When to use |
+|--------|-------------|
+| `copyhub login` | Best first run: wizard saves `config.json`, then Google sign-in, Sheet ID, shortcut. |
+| `copyhub config --client-id … --client-secret …` | Writes OAuth straight into `config.json`. |
+| `.env` / shell | Only when **`config.json` does not** hold a full ID+Secret pair, or you intentionally use env-only OAuth. |
+
+**Safari / Mac wizard tip:** Prefer **Download JSON** from Google Console and paste `client_id` / `client_secret`; clear fields before paste so Keychain does not inject an old secret.
+
+---
+
+## Google Cloud setup (step-by-step)
+
+Use this when you or someone you onboard needs **Client ID**, **Client Secret**, and **Spreadsheet ID**.
+
+### 1. Project
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/).  
+2. Create or select a **project** (top bar). All steps below use this project.
+
+### 2. Enable Sheets API
+
+1. Open **[Google Sheets API](https://console.cloud.google.com/apis/library/sheets.googleapis.com)** in the API Library.  
+2. Confirm project.  
+3. Click **Enable** and wait until it finishes.
+
+### 3. OAuth consent screen (first time)
+
+1. **APIs & Services** → **OAuth consent screen**.  
+2. **External** (most individuals) or **Internal** (Workspace org only).  
+3. Fill **App name**, **User support email**, **Developer contact**.  
+4. **Scopes** — can be refined later; CopyHub uses Google APIs as required by the auth libraries.  
+5. If status is **Testing**, add **Test users** until you publish.
+
+### 4. OAuth Client ID & Secret
+
+1. **[Credentials](https://console.cloud.google.com/apis/credentials)** → **Create credentials** → **OAuth client ID**.  
+2. Type: **Web application** — name e.g. `CopyHub local`.  
+3. **Authorized redirect URIs** → **Add URI**:
+
+   ```
+   http://127.0.0.1:19999/oauth2callback
+   ```
+
+   (Match port to `COPYHUB_OAUTH_REDIRECT_PORT` / `redirectPort` if you customize it.)
+
+4. **Create** → copy **Client ID** and **Client Secret** (or **Download JSON**).
+
+Feed them into `copyhub login`, `copyhub config`, or `COPYHUB_GOOGLE_CLIENT_ID` / `COPYHUB_GOOGLE_CLIENT_SECRET` — see [OAuth: config vs env](#oauth-config-vs-env-important).
+
+### 5. Spreadsheet ID (from the Sheet URL)
+
+Stored as `googleSheetId` in `config.json` (or entered on the setup page after login).
+
+```
+https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit
+```
+
+**`SHEET_ID`** is only the segment **between** `/d/` and **`/edit`** (stop before `?` if present).
+
+| Example path | ID you need |
+|--------------|-------------|
+| `…/d/1AbCdEfGhIjKlMnOpQrStUvWxYz1234567890/edit` | `1AbCdEfGhIjKlMnOpQrStUvWxYz1234567890` |
+
+**Sharing:** The account used in **`copyhub login`** must **own** the spreadsheet or have **edit** access.
+
+---
+
+## OAuth: config vs env (important)
+
+| Situation | Behavior |
+|-----------|----------|
+| `~/.copyhub/config.json` has **both** `clientId` and `clientSecret` | CopyHub **always** uses this pair; **`COPYHUB_GOOGLE_*`** from env / `.env` **ignored** for ID & Secret. |
+| Config missing a full pair | Uses **`COPYHUB_GOOGLE_CLIENT_ID`** + **`COPYHUB_GOOGLE_CLIENT_SECRET`** from env (after `.env` merge). |
+
+Never pair ID from one source with Secret from another.
+
+Values are **sanitized** on read/write (BOM, CRLF, NBSP, zero-width chars, stray brackets).
+
+```bash
+copyhub status    # shows which OAuth source is active
 ```
 
 ---
@@ -151,18 +248,18 @@ copyhub start --foreground
 
 | Command | Description |
 |---------|-------------|
-| `copyhub config --client-id ID --client-secret SEC [--redirect-port P] [--sheet-id ID]` | Writes OAuth (and optional Sheet ID, port) to `config.json`. |
-| `copyhub login` | OAuth flow + browser setup. |
-| `copyhub logout` | Deletes `tokens.json` (config unchanged). |
-| `copyhub status` | OAuth, Sheet, token, overlay, daemon. |
+| `copyhub config --client-id ID --client-secret SEC [--redirect-port P] [--sheet-id ID]` | Write OAuth (+ optional Sheet ID, port) to `config.json`. |
+| `copyhub login` | Full OAuth + browser setup flow. |
+| `copyhub logout` | Deletes `tokens.json`; config unchanged. |
+| `copyhub status` | OAuth source, Sheet, tokens, overlay, daemon. |
 | `copyhub start [--no-sheet] [--no-overlay] [--foreground]` | Default **background**; single instance. |
-| `copyhub restart [--no-sheet] [--no-overlay] [--foreground]` | Stops the daemon if running, then **`start`s again** — reloads config, `.env`, overlay shortcut. |
-| `copyhub list` / `copyhub ls` | Daemon PID (if any). |
-| `copyhub stop` | Stops daemon and child overlay. |
-| `copyhub overlay` | Electron window only (no clipboard daemon). |
-| `copyhub reset --yes` | **Deletes all** of `~/.copyhub` (config, tokens, history, run state). `.env` files outside that folder are untouched. |
-| `copyhub commands` / `copyhub cmds` | Quick command list. |
-| `copyhub --help` | Commander help. |
+| `copyhub restart [--no-sheet] [--no-overlay] [--foreground]` | Stop daemon if running, then start again (reloads config / `.env` / shortcut). |
+| `copyhub list` · `copyhub ls` | Show daemon PID if running. |
+| `copyhub stop` | Stop daemon + overlay child. |
+| `copyhub overlay` | Electron overlay only (no clipboard daemon). |
+| `copyhub reset --yes` | **Delete entire** `~/.copyhub` (config, tokens, history, run state). `.env` elsewhere untouched. |
+| `copyhub commands` · `copyhub cmds` | Short command list. |
+| `copyhub --help` | Full Commander help. |
 
 ---
 
@@ -170,62 +267,69 @@ copyhub start --foreground
 
 | Variable | Meaning |
 |----------|---------|
-| `COPYHUB_GOOGLE_CLIENT_ID` | OAuth Client ID (only used when config **does not** contain a full ID+Secret pair). |
-| `COPYHUB_GOOGLE_CLIENT_SECRET` | OAuth Client Secret (same rule). |
-| `COPYHUB_OAUTH_REDIRECT_PORT` | Localhost port for OAuth (default `19999`). Must match redirect URI in Google Console. |
-| `COPYHUB_OVERLAY_ACCELERATOR` | Electron shortcut ([Accelerator](https://www.electronjs.org/docs/latest/api/accelerator)); **overrides** config when set. |
-| `COPYHUB_START_NO_OVERLAY` | `=1` → `copyhub start` does not spawn overlay. |
-| `COPYHUB_OVERLAY_STICKY` | `=1` → overlay does not hide on blur (only Esc / picking a row). |
-| `COPYHUB_OVERLAY_HIDE_ON_START` | `=1` → do not show window at overlay startup (open via shortcut/tray). |
-| `COPYHUB_OVERLAY_SKIP_TASKBAR` | `=1` → hide from taskbar (Windows/Electron). |
-| `COPYHUB_POLL_MS` | Clipboard poll interval (ms). |
+| `COPYHUB_GOOGLE_CLIENT_ID` | OAuth Client ID — only if config **lacks** full ID+Secret pair. |
+| `COPYHUB_GOOGLE_CLIENT_SECRET` | OAuth Client Secret — same rule. |
+| `COPYHUB_OAUTH_REDIRECT_PORT` | Local OAuth port (default `19999`). Must match Google Console redirect URI. |
+| `COPYHUB_OVERLAY_ACCELERATOR` | Electron [Accelerator](https://www.electronjs.org/docs/latest/api/accelerator); env **overrides** config when set. |
+| `COPYHUB_START_NO_OVERLAY` | `=1` → `copyhub start` skips spawning overlay. |
+| `COPYHUB_OVERLAY_STICKY` | `=1` → overlay stays open on blur (close with Esc or picking a row). |
+| `COPYHUB_OVERLAY_HIDE_ON_START` | `=1` → hide overlay window until shortcut / tray. |
+| `COPYHUB_OVERLAY_SKIP_TASKBAR` | `=1` → hide from taskbar (Windows / Electron). |
+| `COPYHUB_POLL_MS` | Clipboard polling interval (milliseconds). |
 
-Electron inherits `process.env` from the daemon/CLI parent, so these apply once present in that environment.
+The Electron child inherits `process.env` from whatever launched the daemon.
 
 ---
 
 ## Data directory
 
-Everything lives under **`~/.copyhub/`** (Windows: **`%USERPROFILE%\.copyhub`**):
+All state under **`~/.copyhub/`** — Windows: **`%USERPROFILE%\.copyhub`**.
 
-| File | Contents |
-|------|----------|
+| File | Purpose |
+|------|---------|
 | `config.json` | OAuth (`clientId`, `clientSecret`, `redirectPort`), `googleSheetId`, `overlayAccelerator`, `overlayPlatform`, … |
 | `tokens.json` | OAuth refresh / access tokens |
 | `history.jsonl` | Clipboard history (JSON Lines) |
-| `run.json` | PID and metadata when `copyhub start` runs in the background |
+| `run.json` | PID / metadata when `copyhub start` runs in background |
 
 ---
 
 ## Google Sheets
 
-- Appends rows when Sheets are enabled and tokens are valid.  
-- New tab per **calendar day**: `COPYHUB-YYYY-MM-DD`.  
-- The spreadsheet must be shared with the Google account used for OAuth (or owned by that account).  
-- If the API reports disabled / permission errors: check logs — some errors include Enable API links from formatted messages in code.
+- Appends rows when Sheets sync is on and tokens are valid.  
+- Daily tab name: **`COPYHUB-YYYY-MM-DD`** (machine timezone).  
+- **Spreadsheet ID** — from `https://docs.google.com/spreadsheets/d/<SHEET_ID>/edit` ([details](#5-spreadsheet-id-from-the-sheet-url)).  
+- Enable **[Sheets API](https://console.cloud.google.com/apis/library/sheets.googleapis.com)** on the Cloud project that owns your OAuth client.  
+- Sheet must be owned by or shared (**edit**) with the Google account from `copyhub login`.  
+- API / permission errors: check logs; some messages include Console links.
 
 ---
 
 ## Overlay (Electron)
 
-- Default shortcut (**all platforms**, including macOS): **`Control+Shift+H`** — **⌃ Control** (bottom-left on Apple keyboards) or **Ctrl** on PC layouts — **same physical position**, not ⌘ / Win.
-- For **⌘ Command + Shift + H** on Mac: set `overlayAccelerator` to `Command+Shift+H` (avoid `CommandOrControl+…` — on macOS Electron maps that to ⌘, so **⌃ Control** will not trigger the overlay). Legacy preset `CommandOrControl+Shift+H` is migrated to ⌃+Shift+H when the overlay starts.
-- **macOS**: you may need **Accessibility** (*Privacy & Security*) for the app that launches Electron (Terminal, iTerm, …). If shortcuts still fail with non-US layouts, try **Input Source QWERTY** (Electron `globalShortcut` limitation).
-- Overlay paginates ~10 items; Sheet data loads incrementally (not all tabs at once).  
-- Click outside the window usually closes the overlay (unless `COPYHUB_OVERLAY_STICKY=1`). **Esc** closes.
+| Topic | Detail |
+|-------|--------|
+| **Default shortcut** | **`Control+Shift+H`** everywhere — **⌃ Control** (Apple) / **Ctrl** (PC), same physical key — **not** ⌘ Command or Win. |
+| **⌘ + Shift + H on Mac** | Set `overlayAccelerator` to `Command+Shift+H`. Avoid `CommandOrControl+…` on macOS (Electron maps it to ⌘). Preset `CommandOrControl+Shift+H` is migrated to ⌃+Shift+H at overlay startup. |
+| **macOS** | **Accessibility** may be required for the parent of Electron (Terminal, iTerm, …). Non-US layouts can break `globalShortcut` — try **ABC / US QWERTY**. |
+| **Behavior** | ~10 rows per page; Sheet fills in incrementally. Click outside closes (unless `COPYHUB_OVERLAY_STICKY=1`). **Esc** closes. |
 
 ---
 
 ## Clipboard & history
 
-- Watcher skips consecutive clipboard duplicates (same hash).  
-- Before writing file/Sheet, if content **exactly matches the newest row** in `history.jsonl`, it is **skipped** (avoids re-saving the same string after clipboard churn).
+- Ignores **consecutive** duplicate clipboard content (same hash).  
+- Skips a write if new text **equals** the latest line in `history.jsonl` (reduces noise from clipboard churn).
 
 ---
 
-## Updating
+## Updating (latest version)
 
-`~/.copyhub` data is kept when upgrading the package.
+Your **`~/.copyhub`** data (config, tokens, history) is **kept** when you upgrade the CLI/package.
+
+### Already installed — npm global (recommended)
+
+If CopyHub was installed with **`npm install -g copyhub-cli`**, upgrade then restart the daemon:
 
 ```bash
 copyhub stop
@@ -233,60 +337,122 @@ npm install -g copyhub-cli@latest
 copyhub start
 ```
 
-(If you only changed config / `.env`: `copyhub restart`.)
+Or bump the global install using npm’s updater (follows semver for whatever range npm recorded):
 
-From source: `git pull`, `npm install`, then `copyhub start` (or `npm link` while developing).
+```bash
+copyhub stop
+npm update -g copyhub-cli
+copyhub start
+```
+
+Check what you have installed:
+
+```bash
+npm ls -g copyhub-cli
+copyhub --help
+```
+
+> **Prefer `npm install -g copyhub-cli@latest`** when you want the **newest** tag on npm regardless of range. **`npm update -g copyhub-cli`** updates within the installed semver range (often enough if you originally installed without pinning).  
+> If you only changed settings (no package upgrade), use **`copyhub restart`** instead.
+
+### Already installed — from this repo (`git clone`)
+
+```bash
+copyhub stop
+git pull
+npm install
+copyhub start
+```
+
+While developing with `npm link`, same sequence after `git pull`; ensure `copyhub` on `PATH` points at your linked checkout.
+
+### Summary
+
+| Situation | Command flow |
+|-----------|----------------|
+| Upgrade CLI from npm (newest tag) | `copyhub stop` → `npm install -g copyhub-cli@latest` → `copyhub start` |
+| Upgrade CLI from npm (`npm update`) | `copyhub stop` → `npm update -g copyhub-cli` → `copyhub start` |
+| Reload config / `.env` only | `copyhub restart` |
+| Upgrade from git checkout | `copyhub stop` → `git pull` → `npm install` → `copyhub start` |
 
 ---
 
 ## Troubleshooting
 
-### `invalid_client` or “client secret is invalid” after Google sign-in
+<details>
+<summary><strong><code>invalid_client</code> / “client secret is invalid”</strong></summary>
 
-- Use OAuth client **Web application**, redirect `http://127.0.0.1:<port>/oauth2callback`.  
-- Rotate secret or **Download JSON** for a fresh client; enter again via wizard; on Mac **clear fields** before paste.  
-- `copyhub status` — verify Client ID/Secret source.  
-- CopyHub may show an HTML error page when exchanging the `code` fails.
+- OAuth type **Web application**; redirect `http://127.0.0.1:<port>/oauth2callback`.  
+- Rotate secret or paste fresh JSON; on Mac **clear** wizard fields before paste.  
+- Run `copyhub status`.  
+- Failed token exchange may render an HTML error page.
 
-### OAuth port already in use (`EADDRINUSE`)
+</details>
 
-Change port: `COPYHUB_OAUTH_REDIRECT_PORT` or `copyhub config … --redirect-port P`, and update the redirect URI in Google Console.
+<details>
+<summary><strong>OAuth port in use (<code>EADDRINUSE</code>)</strong></summary>
 
-### `copyhub start` says already running
+Set `COPYHUB_OAUTH_REDIRECT_PORT` or `copyhub config … --redirect-port P`, then mirror the port in Google Console redirect URIs.
 
-Single background instance: `copyhub list` / `copyhub stop`, then start again.
+</details>
 
-### Sheet not writing / API errors
+<details>
+<summary><strong><code>copyhub start</code> — already running</strong></summary>
 
-- Enable Google Sheets API on the correct project.  
-- Check `copyhub status` (token, Sheet ID).  
-- Share the spreadsheet with the signed-in account.
+Single background instance: `copyhub list` → `copyhub stop` → start again.
 
-### Overlay won’t open / shortcut doesn’t work
+</details>
 
-- **macOS**: enable **Accessibility** for Terminal / Node / Electron.  
-- Default is **Control+Shift+H** (⌃ or Ctrl + Shift + H), not the Win key.  
-- Ensure the daemon is running (`copyhub list`) or try `copyhub overlay`.  
-- Avoid conflicts with other apps (Spotlight, Alfred, …).
+<details>
+<summary><strong>Sheet not writing / API errors</strong></summary>
 
-### Reset and start clean
+- Sheets API enabled on correct project.  
+- `copyhub status` — token + Sheet ID.  
+- Share spreadsheet with signed-in Google account.
+
+</details>
+
+<details>
+<summary><strong>Overlay / shortcut dead</strong></summary>
+
+- **macOS:** Accessibility for Terminal / Node / Electron.  
+- Default **Control+Shift+H** (not Win key).  
+- `copyhub list` → running? Try `copyhub overlay`.  
+- Shortcut conflicts: Spotlight, Alfred, …  
+
+</details>
+
+<details>
+<summary><strong>Factory reset</strong></summary>
 
 ```bash
 copyhub stop
 copyhub reset --yes
 ```
 
-Then remove or edit `COPYHUB_GOOGLE_*` in your shell / `~/.copyhub/.env` if you no longer want env-based OAuth. `.env` files are **not** removed by `reset`.
+Remove or edit `COPYHUB_GOOGLE_*` in shell / `~/.copyhub/.env` if you no longer want env OAuth. `reset` does **not** delete unrelated `.env` files.
+
+</details>
 
 ---
 
-## Security notes
+## Security
 
-- `config.json` and `tokens.json` contain OAuth secrets — standard user-only permissions under `~/.copyhub`.  
-- Do not commit `.env` or CopyHub data to public git.
+- `config.json` and `tokens.json` hold secrets — keep `~/.copyhub` user-private.  
+- Never commit `.env` or CopyHub data to public repositories.
+
+---
+
+## Tips (PayPal)
+
+If CopyHub is useful to you, tips are welcome via **PayPal**:
+
+**[vietduy989kc@gmail.com](mailto:vietduy989kc@gmail.com)**
+
+In PayPal, choose **Send** and enter that email as the recipient. Thank you for supporting the project.
 
 ---
 
 ## License
 
-MIT — see `package.json`.
+MIT — see [`package.json`](./package.json).

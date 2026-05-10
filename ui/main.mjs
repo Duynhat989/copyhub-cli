@@ -11,6 +11,7 @@ import {
   Menu,
   nativeImage,
   systemPreferences,
+  powerMonitor,
 } from 'electron';
 import { loadCopyhubEnv } from '../src/load-env.js';
 import { readRecentHistorySync } from '../src/storage.js';
@@ -132,6 +133,28 @@ function applyAlwaysOnTopStack(w) {
   }
 }
 
+/** Bring app + overlay forward (macOS often needs app focus for always-on-top popups after idle). */
+function bringOverlayToFront(w) {
+  if (!w || w.isDestroyed()) return;
+  applyAlwaysOnTopStack(w);
+  if (process.platform === 'darwin') {
+    try {
+      app.focus({ steal: true });
+    } catch {
+      try {
+        app.focus();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  try {
+    w.focus();
+  } catch {
+    /* ignore */
+  }
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: OVERLAY_WIDTH,
@@ -153,6 +176,19 @@ function createWindow() {
   });
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+
+  win.webContents.on('render-process-gone', (_event, details) => {
+    console.warn('[CopyHub overlay] Renderer process ended:', details.reason);
+    if (!win || win.isDestroyed()) return;
+    try {
+      win.webContents.reload();
+    } catch (e) {
+      console.warn(
+        '[CopyHub overlay] Reload after renderer exit failed:',
+        /** @type {Error} */ (e).message,
+      );
+    }
+  });
 
   win.on('show', () => {
     applyAlwaysOnTopStack(win);
@@ -185,8 +221,7 @@ function createWindow() {
     }
     placeWindowAtCursor(win);
     win.show();
-    applyAlwaysOnTopStack(win);
-    win.focus();
+    bringOverlayToFront(win);
     win.webContents.send('overlay:open');
     setTimeout(() => applyAlwaysOnTopStack(win), 120);
     armBlurHideEnable(win);
@@ -218,18 +253,50 @@ function placeWindowAtCursor(w) {
 }
 
 function toggleOverlay() {
-  if (!win) return;
-  if (win.isVisible()) {
-    win.hide();
-  } else {
+  try {
+    if (!win || win.isDestroyed()) {
+      blurHideEnabled = false;
+      createWindow();
+      return;
+    }
+    if (win.isVisible()) {
+      win.hide();
+      return;
+    }
     blurHideEnabled = false;
     placeWindowAtCursor(win);
     win.show();
-    applyAlwaysOnTopStack(win);
-    win.focus();
-    win.webContents.send('overlay:open');
+    bringOverlayToFront(win);
+    const wc = win.webContents;
+    if (!wc.isDestroyed()) {
+      wc.send('overlay:open');
+    }
     setTimeout(() => applyAlwaysOnTopStack(win), 120);
     armBlurHideEnable(win);
+  } catch (e) {
+    const msg = /** @type {Error} */ (e).message || String(e);
+    console.warn('[CopyHub overlay] toggle failed:', msg);
+    try {
+      if (win && !win.isDestroyed()) {
+        const wc = win.webContents;
+        if (!wc.isDestroyed()) {
+          wc.reload();
+          return;
+        }
+      }
+    } catch {
+      /* recreate below */
+    }
+    try {
+      if (win && !win.isDestroyed()) {
+        win.destroy();
+      }
+    } catch {
+      /* ignore */
+    }
+    win = null;
+    blurHideEnabled = false;
+    createWindow();
   }
 }
 
@@ -287,6 +354,70 @@ function registerHotkeys() {
     }
   }
   return { accelerator: '', usedFallback: false };
+}
+
+/**
+ * macOS often drops Electron globalShortcut listeners (sleep/wake or while running); re-register.
+ * @param {{ silentSuccess?: boolean }} [opts] — omit success log for periodic refresh noise
+ */
+function reregisterOverlayHotkeys(opts = {}) {
+  const silentSuccess = Boolean(opts.silentSuccess);
+  const prev = overlayHotkeyMeta.accelerator;
+  if (prev) {
+    try {
+      globalShortcut.unregister(prev);
+    } catch {
+      /* ignore */
+    }
+  }
+  const { accelerator, usedFallback } = registerHotkeys();
+  overlayHotkeyMeta = {
+    accelerator,
+    usedFallback,
+    requestedRaw:
+      process.env.COPYHUB_OVERLAY_ACCELERATOR?.trim() ||
+      loadOverlayAcceleratorFromConfigSync() ||
+      '',
+  };
+  if (accelerator) {
+    if (!silentSuccess) {
+      console.log('[CopyHub overlay] Shortcut active again:', accelerator);
+    }
+  } else {
+    console.warn(
+      '[CopyHub overlay] Shortcut re-registration failed — open from menu bar or restart CopyHub.',
+    );
+  }
+  refreshTrayContextMenu();
+}
+
+/** Detect shortcut unregistered while process still runs (common on macOS without sleep). */
+function startGlobalShortcutHealthMonitor() {
+  const intervalMs = process.platform === 'darwin' ? 45_000 : 120_000;
+  setInterval(() => {
+    const acc = overlayHotkeyMeta.accelerator;
+    if (!acc || !gotLock) return;
+    try {
+      if (!globalShortcut.isRegistered(acc)) {
+        console.warn('[CopyHub overlay] Global shortcut registration lost — repairing.');
+        reregisterOverlayHotkeys({ silentSuccess: false });
+      }
+    } catch (e) {
+      console.warn(
+        '[CopyHub overlay] Shortcut health check failed:',
+        /** @type {Error} */ (e).message,
+      );
+    }
+  }, intervalMs);
+}
+
+/** Proactive refresh: Electron/macOS can leave shortcuts broken while isRegistered stays true. */
+function startDarwinShortcutKeepalive() {
+  if (process.platform !== 'darwin') return;
+  const periodMs = 8 * 60 * 1000;
+  setInterval(() => {
+    reregisterOverlayHotkeys({ silentSuccess: true });
+  }, periodMs);
 }
 
 function mergeHistoryForOverlay(localItems, sheetItems, cap) {
@@ -547,23 +678,37 @@ function registerIpc() {
   });
 }
 
+function buildTrayMenuTemplate() {
+  const accLabel = overlayHotkeyMeta.accelerator
+    ? `Shortcut: ${overlayHotkeyMeta.accelerator}`
+    : 'Shortcut: (see terminal)';
+  return [
+    { label: accLabel, enabled: false },
+    { label: 'Open history (always on top)', click: () => toggleOverlay() },
+    { type: 'separator' },
+    { label: 'Quit', click: () => app.quit() },
+  ];
+}
+
+function refreshTrayContextMenu() {
+  if (!tray) return;
+  try {
+    tray.setContextMenu(Menu.buildFromTemplate(buildTrayMenuTemplate()));
+  } catch (e) {
+    console.warn(
+      '[CopyHub overlay] Tray menu refresh failed:',
+      /** @type {Error} */ (e).message,
+    );
+  }
+}
+
 function registerTray() {
   const icon = nativeImage.createFromDataURL(
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAMUlEQVQ4T2NkYGAQYcAP3uCTZhn1IGOMJoAmBGOSMDEwMmABWDWHJjBCSpBKGBSDjBAAAeoRBIEs/x0AAAAASUVORK5CYII=',
   );
   tray = new Tray(icon);
   tray.setToolTip('CopyHub overlay');
-  const accLabel = overlayHotkeyMeta.accelerator
-    ? `Shortcut: ${overlayHotkeyMeta.accelerator}`
-    : 'Shortcut: (see terminal)';
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: accLabel, enabled: false },
-      { label: 'Open history (always on top)', click: () => toggleOverlay() },
-      { type: 'separator' },
-      { label: 'Quit', click: () => app.quit() },
-    ]),
-  );
+  tray.setContextMenu(Menu.buildFromTemplate(buildTrayMenuTemplate()));
   tray.on('click', () => toggleOverlay());
 }
 
@@ -617,6 +762,14 @@ if (gotLock) {
     } catch (e) {
       console.warn('Could not create system tray icon:', /** @type {Error} */ (e).message);
     }
+
+    /** Delay slightly so macOS finishes restoring input / accessibility after wake. */
+    powerMonitor.on('resume', () => {
+      setTimeout(() => reregisterOverlayHotkeys({ silentSuccess: false }), 400);
+    });
+
+    startGlobalShortcutHealthMonitor();
+    startDarwinShortcutKeepalive();
   });
 
   app.on('will-quit', () => {

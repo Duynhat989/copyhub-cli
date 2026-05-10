@@ -1,6 +1,6 @@
 {
   "name": "copyhub-cli",
-  "version": "1.0.9",
+  "version": "2.1.1",
   "description": "CopyHub — clipboard, local history, Google Sheets sync (OAuth). Windows, macOS, Linux.",
   "type": "module",
   "bin": {
